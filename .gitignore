@@ -1,0 +1,30 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Build / Packaging
+dist/
+build/
+*.egg-info/
+
+# Virtual envs
+.env/
+venv/
+*.venv/
+
+# Data
+*.zvi
+*.ome.tiff
+output/
+napari_bruce_output/
+
+# OS files
+.DS_Store
+
+# Models (if large)
+*.h5
+*.pb
+models/
+
+deprecated/
+other/

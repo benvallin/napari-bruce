@@ -1,0 +1,24 @@
+[project]
+name = "napari-bruce"
+version = "0.0.1"
+requires-python = ">=3.10,<3.11"
+classifiers = [
+    "Framework :: napari",
+]
+dependencies = []
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"*" = ["*.yaml", "bf/bioformats_package.jar"]
+
+[project.entry-points."napari.manifest"]
+napari-bruce = "napari_bruce:napari.yaml"

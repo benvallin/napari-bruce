@@ -1,0 +1,19 @@
+name: napari-bruce
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.10
+  - napari                 
+  - pyqt                   
+  - numpy
+  - opencv                 
+  - csbdeep
+  - stardist
+  - ome-types
+  - pandas
+  - matplotlib
+  - tifffile               
+  - openjdk                
+  - pip

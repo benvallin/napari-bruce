@@ -1,0 +1,10 @@
+name: napari-bruce
+contributions:
+  commands:
+    - id: napari-bruce.run
+      title: Bruce
+      python_name: napari_bruce.main:PluginManager
+  widgets:
+    - command: napari-bruce.run  
+      display_name: Bruce
+      autogenerate: false
