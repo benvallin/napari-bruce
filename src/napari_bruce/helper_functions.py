@@ -696,7 +696,6 @@ def load_ome_tiff(file: str) -> list:
   
   return output
 
-
 # %% txt_to_elem_dfs() ----
 
 def txt_to_elem_dfs(file: str) -> list:
@@ -1100,7 +1099,7 @@ def make_default_config() -> dict:
                                'high_pct': 99.95,
                                'stardist_model': 'stardist_psyn',
                                'min_n_pix': 800,
-                               'color': 'green'}},
+                               'color': 'cyan'}},
             'min_pct_ovl_ch0_by_ch1': 20,
             'min_pct_ovl_ch1_by_ch0': 80}
   

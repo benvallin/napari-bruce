@@ -17,7 +17,7 @@
       "high_pct": 99.95,
       "stardist_model": "stardist_psyn",
       "min_n_pix": 800,
-      "color": "green"
+      "color": "cyan"
     }
   },
   "min_pct_ovl_ch0_by_ch1": 20,

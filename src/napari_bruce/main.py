@@ -129,6 +129,8 @@ class PluginManager(QWidget):
               '_filter_overlap_requested']:
       
       setattr(self, i, False)  
+      
+    self._msg = '' 
     
     self.btn_select = QPushButton('Select file')
     self.btn_select.clicked.connect(self.on_select_clicked)
@@ -200,6 +202,8 @@ class PluginManager(QWidget):
       
       setattr(self, i, False)  
     
+    self._msg = '' 
+    
     # Delay viewer reset
     QApplication.processEvents()
     
@@ -229,7 +233,7 @@ class PluginManager(QWidget):
     # Abort if user cancelled selection
     if self.path == '':
       
-      self.send_message('.zvi file selection cancelled')
+      self.send_message(f'{self._msg}.zvi file selection cancelled')
       
       return
     
@@ -256,7 +260,7 @@ class PluginManager(QWidget):
       
       self.layout.insertWidget(i, j)
     
-    self.send_message('👍 .zvi file selected')
+    self.send_message(f'{self._msg}👍 .zvi file selected')
   
   def on_load_clicked(self):
     
@@ -266,7 +270,7 @@ class PluginManager(QWidget):
     self.btn_load.deleteLater()    
     self.btn_load = None
         
-    self.send_message('💪 Loading images...')
+    self.send_message(f'{self._msg}💪 Loading images...')
     
     # Trigger load worker thread 
     self.start_load_thread()
@@ -316,23 +320,14 @@ class PluginManager(QWidget):
     self._load_worker_thread.start()
 
   def on_load_finished(self, data, metadata):
-    
-    # Abort if n channels is not consistent between image metadata and config 
-    if len(metadata['channels']) != len(self.config['channels']):
-      
-      self.on_clear_clicked('⚠️ Channel numbers are not consistent between image and config files')
-            
-      return
-    
-    # Abort if channel names are not consistent between metadata and config 
+        
+    # Warn if channel names are not consistent between metadata and config 
     ch0_nm_ok = metadata['channels'][0]['name'] == self.config['channels'][0]['name']
     ch1_nm_ok = metadata['channels'][1]['name'] == self.config['channels'][1]['name']
     
     if not (ch0_nm_ok and ch1_nm_ok):
-            
-      self.on_clear_clicked('⚠️ Channel names are not consistent between image and config files')
-            
-      return
+      
+      self._msg = f'{self._msg}⚠️ Channel name mismatch between image and config\n\n'
     
     # Update data / metadata / ch0_nm / ch1_nm attributes with load worker output
     self.data = data
@@ -342,7 +337,7 @@ class PluginManager(QWidget):
       setattr(self, j, self.metadata['channels'][i]['name'])
     
     # Delay viewer update
-    self.send_message('⏳ Updating viewer...')
+    self.send_message(f'{self._msg}⏳ Updating viewer...')
     
     QApplication.processEvents()
     
@@ -381,7 +376,8 @@ class PluginManager(QWidget):
                                                               name = f'{k} - add',
                                                               shape_type = 'path',
                                                               face_color=[(1.0, 1.0, 0.0, 0.0)],
-                                                              edge_color='#f0396a',
+                                                              # edge_color='#f0396a',
+                                                              edge_color=self.config['channels'][i]['color'],
                                                               edge_width=6,
                                                               visible=True)
       self.layers[k]['shapes_layer'].mode = 'add_path'
@@ -425,8 +421,8 @@ class PluginManager(QWidget):
                 self.btn_clear]:
         
         i.setEnabled(True)
-          
-      self.send_message("🔎 Check images in viewer\n\n🔹 Adjust min size thresholds (optional)\n\n👉 Press 'Predict cells' when ready")
+        
+      self.send_message(f"{self._msg}🔎 Check images in viewer\n\n🔹 Adjust min size thresholds (optional)\n\n👉 Press 'Predict cells' when ready")
           
     # Alternatively, proceed with prediction if 'Predict cells' button was clicked
     else:
@@ -462,7 +458,7 @@ class PluginManager(QWidget):
       # Record that prediction has been requested
       self._predict_requested = True
       
-      self.send_message('💪 Loading images...')
+      self.send_message(f'{self._msg}💪 Loading images...')
       
       # Trigger load worker thread 
       self.start_load_thread()
@@ -474,7 +470,7 @@ class PluginManager(QWidget):
   
   def on_img_loaded_and_predict_clicked(self):
           
-    self.send_message('💪 Predicting objects...')
+    self.send_message(f'{self._msg}💪 Predicting objects...')
     
     # Trigger predict worker thread 
     self.start_predict_thread()
@@ -526,7 +522,7 @@ class PluginManager(QWidget):
     # Update data attribute with predict worker output
     self.data = data
     
-    self.send_message('💪 Filtering out small objects...')
+    self.send_message(f'{self._msg}💪 Filtering out small objects...')
     
     # Trigger filter size worker thread 
     self.start_filter_size_thread()    
@@ -536,7 +532,7 @@ class PluginManager(QWidget):
     # Record that size filtering has been requested
     self._filter_size_requested = True
     
-    self.send_message('💪 Re-filtering out small objects...')
+    self.send_message(f'{self._msg}💪 Re-filtering out small objects...')
     
     # Trigger filter size worker thread 
     self.start_filter_size_thread()
@@ -594,7 +590,7 @@ class PluginManager(QWidget):
     self.data = data
     
     # Delay viewer update
-    self.send_message('⏳ Updating viewer...')
+    self.send_message(f'{self._msg}⏳ Updating viewer...')
     
     QApplication.processEvents()
     
@@ -639,9 +635,9 @@ class PluginManager(QWidget):
               self.btn_clear]:
       
       i.setEnabled(True)
-      
-    self.send_message("🔎 Check images in viewer\n\n🔹 Edit cell contours (optional)\n\n👉 Press 'Apply edits' when finished")
-      
+        
+    self.send_message(f"{self._msg}🔎 Check images in viewer\n\n🔹 Edit cell contours (optional)\n\n👉 Press 'Apply edits' when finished")
+        
   def on_apply_edits_clicked(self):
     
     # Remove 'min n pix' boxes, 'Adjust size filter' and 'Apply edits' buttons from viewer
@@ -656,7 +652,7 @@ class PluginManager(QWidget):
       j.deleteLater()    
       setattr(self, i, None)
             
-    self.send_message('💪 Applying edits...')
+    self.send_message(f'{self._msg}💪 Applying edits...')
     
     # Trigger apply edits worker thread 
     self.start_apply_edits_thread()
@@ -705,7 +701,7 @@ class PluginManager(QWidget):
     self.data = data
     
     # Delay viewer update
-    self.send_message('⏳ Updating viewer...')
+    self.send_message(f'{self._msg}⏳ Updating viewer...')
     
     QApplication.processEvents()
     
@@ -753,7 +749,7 @@ class PluginManager(QWidget):
     # Re-enable 'Clear' button
     self.btn_clear.setEnabled(True)
     
-    self.send_message("🔹 Adjust overlap thresholds (optional)\n\n👉 Press 'Find overlaps' when ready")
+    self.send_message(f"{self._msg}🔹 Adjust overlap thresholds (optional)\n\n👉 Press 'Find overlaps' when ready")
        
   def on_overlap_clicked(self):
     
@@ -763,7 +759,7 @@ class PluginManager(QWidget):
     self.btn_overlap.deleteLater()    
     self.btn_overlap = None
         
-    self.send_message('💪 Computing overlaps...')
+    self.send_message(f'{self._msg}💪 Computing overlaps...')
     
     # Trigger overlap worker thread   
     self.start_overlap_thread()
@@ -773,7 +769,7 @@ class PluginManager(QWidget):
     # Record that % overlap filtering has been requested
     self._filter_overlap_requested = True
     
-    self.send_message('💪 Re-computing overlaps...')
+    self.send_message(f'{self._msg}💪 Re-computing overlaps...')
     
     # Trigger overlap worker thread   
     self.start_overlap_thread()
@@ -831,7 +827,7 @@ class PluginManager(QWidget):
     self.data = data
     
     # Delay viewer update
-    self.send_message('⏳ Updating viewer...')
+    self.send_message(f'{self._msg}⏳ Updating viewer...')
     
     QApplication.processEvents()
     
@@ -896,7 +892,7 @@ class PluginManager(QWidget):
     🔎 See merge image in viewer
     '''
     
-    self.send_message(msg)
+    self.send_message(f'{self._msg}{msg}')
   
   def on_save_clicked(self):
     
@@ -919,7 +915,7 @@ class PluginManager(QWidget):
     with open(os.path.join(out_dir_path, 'config.json'), 'w') as f:
       json.dump(self.config, f, indent=2)
     
-    self.send_message(f"💾 Results save at:\n{self.config['out_dir_path']}\n\nIn subfolder:\n{self.metadata['img_nm']}")
+    self.send_message(f"{self._msg}💾 Results save at:\n{self.config['out_dir_path']}\n\nIn subfolder:\n{self.metadata['img_nm']}")
 
   def on_min_n_pix_ch0_changed(self, value):
 
@@ -971,6 +967,11 @@ class LoadWorker(QObject):
     
     # Load images and associated metadata
     self.data, self.metadata = funs.load_ome_tiff(file=ome_tiff_file_path)
+    
+    # Subset data and metadata to the first 2 channels
+    self.data = dict(list(self.data.items())[:2])
+    
+    self.metadata['channels'] = dict(list(self.metadata['channels'].items())[:2])
     
     # For each channel...
     for i, k in enumerate(self.data.keys()):
@@ -1142,34 +1143,38 @@ class OverlapWorker(QObject):
         )
     
     # Produce merge image 
-    ch0_red = self.data[self.ch0_nm]['norm_img']
-    ch1_green = self.data[self.ch1_nm]['norm_img']
+    ch0 = self.data[self.ch0_nm]['norm_img'].astype(np.float32)
+    ch1 = self.data[self.ch1_nm]['norm_img'].astype(np.float32)
+
+    c0_r, c0_g, c0_b, _ = to_rgba(self.config['channels'][0]['color'])
+    c1_r, c1_g, c1_b, _ = to_rgba(self.config['channels'][1]['color'])
+
+    scale = 0.8
+    merge_r = scale * (ch0 * c0_r + ch1 * c1_r)
+    merge_g = scale * (ch0 * c0_g + ch1 * c1_g)
+    merge_b = scale * (ch0 * c0_b + ch1 * c1_b)
+
+    merge_norm_img = np.stack([merge_r, merge_g, merge_b], axis=-1)
+    merge_norm_img = np.clip(merge_norm_img, 0, 255).astype(np.uint8)
+        
+    status_colors_ch0 = {'neg': (int(c0_r*255), int(c0_g*255), int(c0_b*255)),
+                         'pos': (0, 255, 0),
+                         'amb': (255, 255, 0)}
     
-    ch0_red = cv2.normalize(ch0_red, None, 0, 255, cv2.NORM_MINMAX)
-    ch1_green = cv2.normalize(ch1_green, None, 0, 255, cv2.NORM_MINMAX)
-    
-    ch0_red = (ch0_red * 0.8).astype(np.uint8)   
-    ch0_blue = (ch0_red * 0.8).astype(np.uint8)   
-    ch1_green = (ch1_green * 0.8).astype(np.uint8)
-    
-    merge_norm_img = cv2.merge([ch0_blue, ch1_green, ch0_red])
-    
-    for i, j in zip(['pos', 'amb', 'neg'],
-                    [(0,0,255), (255,255,0), (255,0,0)]):
+    for i, j in status_colors_ch0.items():
       
-      merge_norm_img = cv2.drawContours(image=merge_norm_img, 
+      merge_norm_img = cv2.drawContours(image=merge_norm_img,
                                         contours=self.data[self.ch0_nm]['cnt'][i], 
-                                        contourIdx=-1, 
-                                        color=j, 
+                                        contourIdx=-1,
+                                        color=j,
                                         thickness=4)
-      
-    merge_norm_img = cv2.drawContours(image=merge_norm_img, 
-                                      contours=self.data[self.ch1_nm]['cnt']['neg'], 
-                                      contourIdx=-1, 
-                                      color=(0,255,0), 
+
+    merge_norm_img = cv2.drawContours(image=merge_norm_img,
+                                      contours=self.data[self.ch1_nm]['cnt']['neg'],
+                                      contourIdx=-1,
+                                      color=(int(c1_r*255), int(c1_g*255), int(c1_b*255)),
                                       thickness=4)
-      
+
     self.data[self.ch0_nm]['merge_norm_img'] = merge_norm_img
-                    
     self.sig_output.emit(self.data)
     
