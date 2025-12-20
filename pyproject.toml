@@ -22,3 +22,6 @@ where = ["src"]
 
 [project.entry-points."napari.manifest"]
 napari-bruce = "napari_bruce:napari.yaml"
+
+[project.scripts]
+bruce = "napari_bruce.cli:main"

@@ -10,29 +10,22 @@ import copy
 import numpy as np
 import cv2
 import json
-import importlib.util
-import importlib.resources
 from matplotlib.colors import to_rgba
 from pathlib import Path
 from qtpy.QtWidgets import QPushButton, QWidget, QLabel, QVBoxLayout, QFileDialog, QDoubleSpinBox, QHBoxLayout, QApplication
 from qtpy.QtCore import Signal, QObject, QThread, QTimer
 from csbdeep.utils import normalize
 from contextlib import redirect_stdout, redirect_stderr
-
-# Import helper functions
-spec = importlib.util.spec_from_file_location('helper_functions',
-                                              str(os.path.join(importlib.resources.files('napari_bruce'), 'helper_functions.py')))
-
-funs = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(funs)
+import napari_bruce.configuration as configuration
+import napari_bruce.workflow as workflow
 
 # Load configuration
-config = funs.get_config()
+config = configuration.get_config()
 
 # Create configuration from default if config file does not exist
-if not config:
+if config is None:
   
-  config = funs.make_default_config()
+  config = configuration.make_default_config()
   
 # Convert config['channels'] keys to int if read from json file 
 else:
@@ -900,15 +893,15 @@ class PluginManager(QWidget):
                                 self.metadata['img_nm'])
     
     # Construct element list and write to file 
-    self.elem_list = funs.make_elem_txt(data_dict=self.data, metadata_dict=self.metadata)
+    self.elem_list = workflow.make_elem_txt(data_dict=self.data, metadata_dict=self.metadata)
     
     with open(os.path.join(out_dir_path, 'elem_list.txt'), 'w') as f:
       f.write(self.elem_list)
       
     # Write data and metadata to file
-    funs.pickle_data(data=self.data, filename=os.path.join(out_dir_path, 'data.pkl'))
+    workflow.pickle_data(data=self.data, filename=os.path.join(out_dir_path, 'data.pkl'))
     
-    funs.pickle_data(data=self.metadata, filename=os.path.join(out_dir_path, 'metadata.pkl'))
+    workflow.pickle_data(data=self.metadata, filename=os.path.join(out_dir_path, 'metadata.pkl'))
     
     # Write config to file
     with open(os.path.join(out_dir_path, 'config.json'), 'w') as f:
@@ -959,13 +952,13 @@ class LoadWorker(QObject):
     ome_tiff_file_path = os.path.join(out_dir_path, Path(self.path).stem+'.ome.tiff')
     
     # Convert PALM .zvi file to OME-TIFF
-    funs.convert_zvi_to_ome(file=self.path, 
-                            out_dir_path=out_dir_path,
-                            jar_pkg='napari_bruce.bf',
-                            jar_name='bioformats_package.jar')
+    workflow.convert_zvi_to_ome(file=self.path, 
+                                out_dir_path=out_dir_path,
+                                jar_pkg='napari_bruce.bf',
+                                jar_name='bioformats_package.jar')
     
     # Load images and associated metadata
-    self.data, self.metadata = funs.load_ome_tiff(file=ome_tiff_file_path)
+    self.data, self.metadata = workflow.load_ome_tiff(file=ome_tiff_file_path)
     
     # Subset data and metadata to the first 2 channels
     self.data = dict(list(self.data.items())[:2])
@@ -979,9 +972,9 @@ class LoadWorker(QObject):
       ch_config = self.config['channels'][i]
       
       # Perform robust normalization      
-      self.data[k]['norm_img'] = funs.robust_normalization(img=self.data[k]['img'], 
-                                                           low_pct=ch_config['low_pct'], 
-                                                           high_pct=ch_config['high_pct']) 
+      self.data[k]['norm_img'] = workflow.robust_normalization(img=self.data[k]['img'], 
+                                                               low_pct=ch_config['low_pct'], 
+                                                               high_pct=ch_config['high_pct']) 
                     
     self.sig_output.emit(self.data, self.metadata)
           
@@ -1012,7 +1005,7 @@ class PredictWorker(QObject):
                                                         nms_thresh=None)[0]
       
       # Compute submask area
-      self.data[v]['msk_area'] = funs.count_submsks_pixels(msk=self.data[v]['msk'])
+      self.data[v]['msk_area'] = workflow.count_submsks_pixels(msk=self.data[v]['msk'])
               
     self.sig_output.emit(self.data)
 
@@ -1043,9 +1036,9 @@ class FilterSizeWorker(QObject):
       ch_config = self.config['channels'][k]
       
       # Discard small submasks
-      self.data[v]['filt_msk'] = funs.discard_small_submsks(msk=self.data[v]['msk'], 
-                                                            pix_dict=self.data[v]['msk_area'],
-                                                            min_n_pix=ch_config['min_n_pix'])
+      self.data[v]['filt_msk'] = workflow.discard_small_submsks(msk=self.data[v]['msk'], 
+                                                                pix_dict=self.data[v]['msk_area'],
+                                                                min_n_pix=ch_config['min_n_pix'])
       
       self.data[v]['filt_msk_edited'] = self.data[v]['filt_msk'].copy()
               
@@ -1085,15 +1078,15 @@ class ApplyEditsWorker(QObject):
       # If user drew cell shapes, add them to the edited cell predictions and compute their area
       if len(self.data[k]['user_submsks']) > 0:
                 
-        self.data[k]['filt_msk_edited'] = funs.append_shapes_to_msk(msk=self.data[k]['filt_msk_edited'],
-                                                                    shapes=self.data[k]['user_submsks'],
-                                                                    start_idx=int(np.max(self.data[k]['filt_msk'])+1))
+        self.data[k]['filt_msk_edited'] = workflow.append_shapes_to_msk(msk=self.data[k]['filt_msk_edited'],
+                                                                        shapes=self.data[k]['user_submsks'],
+                                                                        start_idx=int(np.max(self.data[k]['filt_msk'])+1))
         
         tmp = self.data[k]['filt_msk_edited'].copy()
       
         tmp = np.where(tmp >= int(np.max(self.data[k]['filt_msk'])+1), tmp, 0)
       
-        tmp = funs.count_submsks_pixels(msk=tmp)
+        tmp = workflow.count_submsks_pixels(msk=tmp)
         
         for j in tmp.keys():
           
@@ -1101,7 +1094,7 @@ class ApplyEditsWorker(QObject):
             
             self.data[k]['msk_area'][j] = tmp[j]
       
-      self.data[k]['filt_cnt_edited'] = funs.msk_to_cnts(msk=self.data[k]['filt_msk_edited'])
+      self.data[k]['filt_cnt_edited'] = workflow.msk_to_cnts(msk=self.data[k]['filt_msk_edited'])
                     
     # Produce base merge image 
     ch0 = self.data[self.ch_names[0]]['norm_img'].astype(np.float32)
@@ -1161,7 +1154,7 @@ class OverlapWorker(QObject):
     ch1_nm = self.ch_names[1]
     
     # Compute cell status 
-    self.data[ch0_nm][f'{ch1_nm}_status'], self.data[ch1_nm][f'{ch0_nm}_status'] = funs.get_submsks1_submsks2_status(
+    self.data[ch0_nm][f'{ch1_nm}_status'], self.data[ch1_nm][f'{ch0_nm}_status'] = workflow.get_submsks1_submsks2_status(
       msk1=self.data[ch0_nm]['filt_msk_edited'], 
       msk2=self.data[ch1_nm]['filt_msk_edited'], 
       min_pct_ovl_1by2=self.config['min_pct_ovl_ch0_by_ch1'],
@@ -1180,7 +1173,7 @@ class OverlapWorker(QObject):
       self.data[i]['summary'] = summary
       
       # Extract submasks and contours
-      self.data[i]['submsks'], self.data[i]['cnt']  = funs.status_dict_to_submsks_and_cnts(
+      self.data[i]['submsks'], self.data[i]['cnt']  = workflow.status_dict_to_submsks_and_cnts(
         msk=self.data[i]['filt_msk_edited'],
         status_dict=self.data[i][f'{j}_status']
         )
