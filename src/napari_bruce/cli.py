@@ -41,34 +41,26 @@ def main(argv: list[str] | None = None) -> None:
     )
   
   parser.add_argument(
-    '--config-path',
+    '--show-config-path',
     action='store_true',
-    help='Print the path of the napari-bruce configuration file and exit.',
+    help='print the path of the configuration file and exit.',
     )
   
   parser.add_argument(
     '--edit-config',
     action='store_true',
-    help='Open the napari-bruce configuration file in the default editor.',
+    help='open the configuration file in the default editor.',
     )
   
   parser.add_argument(
     '--reset-config',
     action='store_true',
-    help='Reset the napari-bruce configuration to defaults and exit.',
+    help='reset the configuration to defaults and exit.',
     )
   
   args = parser.parse_args(argv)
   
-  if args.reset_config:
-    
-    config_path = configuration.get_config_file_path()
-    configuration.make_default_config()
-    print(f'Configuration reset to defaults at:\n{config_path}')
-    
-    return
-  
-  if args.config_path:
+  if args.show_config_path:
     
     config_path = configuration.get_config_file_path()
     if not os.path.exists(config_path):
@@ -87,5 +79,15 @@ def main(argv: list[str] | None = None) -> None:
     
     return
   
+  if args.reset_config:
+    
+    config_path = configuration.get_config_file_path()
+    configuration.make_default_config()
+    print(f'Configuration reset to defaults at:\n{config_path}')
+    
+    return
+  
   # Default behaviour: start napari with the plugin
   launch_napari_with_plugin()
+
+# %%
