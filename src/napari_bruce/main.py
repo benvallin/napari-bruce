@@ -103,7 +103,7 @@ class PluginManager(QWidget):
     
     self.config = copy.deepcopy(config)
     
-    for i in ['layers', 'path', 'data', 'metadata', 'ch0_nm', 'ch1_nm',
+    for i in ['layers', 'path', 'data', 'metadata', 'ch_names',
               '_load_worker_thread', '_load_worker',
               '_predict_worker_thread', '_predict_worker',
               '_filter_size_worker_thread', '_filter_size_worker',
@@ -191,8 +191,7 @@ class PluginManager(QWidget):
               'path', 
               'data', 
               'metadata', 
-              'ch0_nm', 
-              'ch1_nm']:
+              'ch_names']:
       
       setattr(self, i, None)
     
@@ -329,12 +328,12 @@ class PluginManager(QWidget):
       
       self._msg = f'{self._msg}⚠️ Channel name mismatch between image and config\n\n'
     
-    # Update data / metadata / ch0_nm / ch1_nm attributes with load worker output
+    # Update data / metadata / ch_names attributes with load worker output
     self.data = data
     self.metadata = metadata
-    
-    for i, j in enumerate(['ch0_nm', 'ch1_nm']):
-      setattr(self, j, self.metadata['channels'][i]['name'])
+    self.ch_names = {}
+    for i in [0, 1]:
+      self.ch_names[i] = self.metadata['channels'][i]['name']
     
     # Delay viewer update
     self.send_message(f'{self._msg}⏳ Updating viewer...')
@@ -346,44 +345,42 @@ class PluginManager(QWidget):
   def _update_viewer_on_load_finished(self):
       
     # Add normalized images to viewer
-    for k in self.data.keys():
+    for i in self.ch_names.values():
       
-      self.viewer.add_image(self.data[k]['norm_img'], name=f'{k} normalized image')
+      self.viewer.add_image(self.data[i]['norm_img'], name=f'{i} normalized image')
     
     # Add empty labels, shapes and merge image layers to viewer
     self.layers = {}
     
-    for i, k in enumerate(self.data.keys()):  
+    for k, v in self.ch_names.items():  
       
-      self.layers[k] = {}
+      self.layers[v] = {}
       
-      temp_array = np.zeros(self.data[k]['norm_img'].shape, 
+      temp_array = np.zeros(self.data[v]['norm_img'].shape, 
                             dtype=int)
       
       color_dict = {0: (0.0, 0.0, 0.0, 0.0),
-                    None: to_rgba(self.config['channels'][i]['color'])}
+                    None: to_rgba(self.config['channels'][k]['color'])}
       
-      self.layers[k]['labels_layer'] = self.viewer.add_labels(temp_array,
-                                                              name=f'{k} - remove',
+      self.layers[v]['labels_layer'] = self.viewer.add_labels(temp_array,
+                                                              name=f'{v} - remove',
                                                               opacity=1.0,
                                                               colormap=color_dict,
                                                               visible=True)
-      self.layers[k]['labels_layer'].visible = False
-      self.layers[k]['labels_layer'].contour = 8
-      self.layers[k]['labels_layer'].brush_size = 80
+      self.layers[v]['labels_layer'].visible = False
+      self.layers[v]['labels_layer'].contour = 8
+      self.layers[v]['labels_layer'].brush_size = 80
       
-      self.layers[k]['shapes_layer'] = self.viewer.add_shapes(data = [],
-                                                              name = f'{k} - add',
+      self.layers[v]['shapes_layer'] = self.viewer.add_shapes(data = [],
+                                                              name = f'{v} - add',
                                                               shape_type = 'path',
-                                                              face_color=[(1.0, 1.0, 0.0, 0.0)],
-                                                              # edge_color='#f0396a',
-                                                              edge_color=self.config['channels'][i]['color'],
+                                                              edge_color=self.config['channels'][k]['color'],
                                                               edge_width=6,
                                                               visible=True)
-      self.layers[k]['shapes_layer'].mode = 'add_path'
-      self.layers[k]['shapes_layer'].visible = False
+      self.layers[v]['shapes_layer'].mode = 'add_path'
+      self.layers[v]['shapes_layer'].visible = False
 
-    temp_array = np.zeros(self.data[list(self.data.keys())[0]]['norm_img'].shape+(3,), 
+    temp_array = np.zeros(self.data[self.ch_names[0]]['norm_img'].shape+(3,), 
                           dtype=np.uint8)
     
     self.layers['merge'] = self.viewer.add_image(temp_array, 
@@ -392,16 +389,16 @@ class PluginManager(QWidget):
                                                  visible=False)
     
     # Set active layer to channel 1 normalized image
-    self.viewer.layers.selection.active = self.viewer.layers[f'{self.ch1_nm} normalized image']
+    self.viewer.layers.selection.active = self.viewer.layers[f'{self.ch_names[1]} normalized image']
     
     # Add 'min n pix' boxes to viewer
-    self.box_min_n_pix_ch0 = ParamValueBox(label=f'min n pix {self.ch0_nm}:', 
+    self.box_min_n_pix_ch0 = ParamValueBox(label=f'min n pix {self.ch_names[0]}:', 
                                            default=self.config['channels'][0]['min_n_pix'],
                                            min_val=0.0, 
                                            max_val=10000.0)
     self.box_min_n_pix_ch0.valueChanged.connect(self.on_min_n_pix_ch0_changed)
       
-    self.box_min_n_pix_ch1 = ParamValueBox(label=f'min n pix {self.ch1_nm}:', 
+    self.box_min_n_pix_ch1 = ParamValueBox(label=f'min n pix {self.ch_names[1]}:', 
                                            default=self.config['channels'][1]['min_n_pix'],
                                            min_val=0.0, 
                                            max_val=10000.0)
@@ -486,7 +483,7 @@ class PluginManager(QWidget):
             
     # Create thread and worker
     self._predict_worker_thread = QThread()
-    self._predict_worker = PredictWorker(self.data)
+    self._predict_worker = PredictWorker(self.data, self.ch_names)
     self._predict_worker.moveToThread(self._predict_worker_thread)
     
     # Start worker when thread starts
@@ -553,7 +550,7 @@ class PluginManager(QWidget):
         
     # Create thread and worker
     self._filter_size_worker_thread = QThread()
-    self._filter_size_worker = FilterSizeWorker(self.data, self.config)
+    self._filter_size_worker = FilterSizeWorker(self.data, self.config, self.ch_names)
     self._filter_size_worker.moveToThread(self._filter_size_worker_thread)
     
     # Start worker when thread starts
@@ -599,17 +596,17 @@ class PluginManager(QWidget):
   def _update_viewer_on_filter_size_finished(self):
     
     # Update labels and shapes layers 
-    for k in self.data.keys():
+    for v in self.ch_names.values():
       
-      self.layers[k]['labels_layer'].visible = False
-      self.layers[k]['labels_layer'].data = self.data[k]['filt_msk_edited']       
-      self.layers[k]['labels_layer'].visible = True    
-      self.layers[k]['labels_layer'].mode = 'erase'
+      self.layers[v]['labels_layer'].visible = False
+      self.layers[v]['labels_layer'].data = self.data[v]['filt_msk_edited']       
+      self.layers[v]['labels_layer'].visible = True    
+      self.layers[v]['labels_layer'].mode = 'erase'
       
-      self.layers[k]['shapes_layer'].visible = True 
+      self.layers[v]['shapes_layer'].visible = True 
     
     # Set active layer to channel 1 shapes layer
-    self.viewer.layers.selection.active = self.layers[self.ch1_nm]['shapes_layer']
+    self.viewer.layers.selection.active = self.layers[self.ch_names[1]]['shapes_layer']
     
     # Add 'Adjust size filter' and 'Apply edits' buttons to viewer if predictions are returned for the first time 
     if not self._filter_size_requested:
@@ -664,7 +661,7 @@ class PluginManager(QWidget):
     
     # Create thread and worker
     self._apply_edits_worker_thread = QThread()
-    self._apply_edits_worker = ApplyEditsWorker(self.layers, self.data)
+    self._apply_edits_worker = ApplyEditsWorker(self.layers, self.data, self.config, self.ch_names)
     self._apply_edits_worker.moveToThread(self._apply_edits_worker_thread)
     
     # Start worker when thread starts
@@ -709,28 +706,30 @@ class PluginManager(QWidget):
   
   def _update_viewer_on_apply_edits_finished(self):
     
-    # Remove shapes layers and update labels layers
-    for k in self.data.keys():
+    # Remove shapes and labels layers 
+    for v in self.ch_names.values():
       
-      self.viewer.layers.remove(self.layers[k]['shapes_layer'])
+      self.viewer.layers.remove(self.layers[v]['shapes_layer'])
+      self.viewer.layers.remove(self.layers[v]['labels_layer'])
       
-      self.layers[k]['labels_layer'].visible = False  
-      self.layers[k]['labels_layer'].data = self.data[k]['filt_msk_edited']
-      self.layers[k]['labels_layer'].name = f'{k} edited ROIs'
-      self.layers[k]['labels_layer'].visible = True
-      self.layers[k]['labels_layer'].mode = 'pan_zoom'
+    # Update merge image layer
+    self.layers['merge'].visible = False
     
-    # Set active layer to channel 1 labels layer
-    self.viewer.layers.selection.active = self.layers[self.ch1_nm]['labels_layer']
+    self.layers['merge'].data = self.data['merge']['merge_norm_img_rois']
+    
+    self.layers['merge'].visible = True
+    
+    # Set active layer to merge image layer
+    self.viewer.layers.selection.active = self.layers['merge']
 
     # Add 'min % ovl' boxes and 'Find overlaps' button to viewer 
-    self.box_min_pct_ovl_ch0_by_ch1 = ParamValueBox(label=f'min %ovl {self.ch0_nm}/{self.ch1_nm}:', 
+    self.box_min_pct_ovl_ch0_by_ch1 = ParamValueBox(label=f'min %ovl {self.ch_names[0]}/{self.ch_names[1]}:', 
                                                     default=self.config['min_pct_ovl_ch0_by_ch1'],
                                                     min_val=0.0, 
                                                     max_val=100.0)
     self.box_min_pct_ovl_ch0_by_ch1.valueChanged.connect(self.on_min_pct_ovl_ch0_by_ch1_changed)
     
-    self.box_min_pct_ovl_ch1_by_ch0 = ParamValueBox(label=f'min %ovl {self.ch1_nm}/{self.ch0_nm}:', 
+    self.box_min_pct_ovl_ch1_by_ch0 = ParamValueBox(label=f'min %ovl {self.ch_names[1]}/{self.ch_names[0]}:', 
                                                     default=self.config['min_pct_ovl_ch1_by_ch0'],
                                                     min_val=0.0, 
                                                     max_val=100.0)
@@ -790,7 +789,7 @@ class PluginManager(QWidget):
     
     # Create thread and worker
     self._overlap_worker_thread = QThread()
-    self._overlap_worker = OverlapWorker(self.data, self.config)
+    self._overlap_worker = OverlapWorker(self.data, self.config, self.ch_names)
     self._overlap_worker.moveToThread(self._overlap_worker_thread)
     
     # Start worker when thread starts
@@ -838,7 +837,7 @@ class PluginManager(QWidget):
     # Update merge image layer
     self.layers['merge'].visible = False
     
-    self.layers['merge'].data = self.data[self.ch0_nm]['merge_norm_img']
+    self.layers['merge'].data = self.data['merge']['merge_norm_img_status']
     
     self.layers['merge'].visible = True
     
@@ -873,20 +872,20 @@ class PluginManager(QWidget):
     📚 Count summary
     
     
-    🔹 {self.ch0_nm}
+    🔹 {self.ch_names[0]}
     
-      🔸 total: {self.data[self.ch0_nm]['summary']['total']}
-      🔸 {self.ch1_nm}-neg: {self.data[self.ch0_nm]['summary']['neg']}
-      🔸 {self.ch1_nm}-pos: {self.data[self.ch0_nm]['summary']['pos']}
-      🔸 {self.ch1_nm}-ambiguous: {self.data[self.ch0_nm]['summary']['amb']}
+      🔸 total: {self.data[self.ch_names[0]]['summary']['total']}
+      🔸 {self.ch_names[1]}-neg: {self.data[self.ch_names[0]]['summary']['neg']}
+      🔸 {self.ch_names[1]}-pos: {self.data[self.ch_names[0]]['summary']['pos']}
+      🔸 {self.ch_names[1]}-ambiguous: {self.data[self.ch_names[0]]['summary']['amb']}
     
     
-    🔹 {self.ch1_nm} 
+    🔹 {self.ch_names[1]} 
     
-      🔸 total: {self.data[self.ch1_nm]['summary']['total']}
-      🔸 {self.ch0_nm}-neg: {self.data[self.ch1_nm]['summary']['neg']}
-      🔸 {self.ch0_nm}-pos: {self.data[self.ch1_nm]['summary']['pos']}
-      🔸 {self.ch0_nm}-ambiguous: {self.data[self.ch1_nm]['summary']['amb']}
+      🔸 total: {self.data[self.ch_names[1]]['summary']['total']}
+      🔸 {self.ch_names[0]}-neg: {self.data[self.ch_names[1]]['summary']['neg']}
+      🔸 {self.ch_names[0]}-pos: {self.data[self.ch_names[1]]['summary']['pos']}
+      🔸 {self.ch_names[0]}-ambiguous: {self.data[self.ch_names[1]]['summary']['amb']}
     
     
     🔎 See merge image in viewer
@@ -995,23 +994,25 @@ class PredictWorker(QObject):
   
   def __init__(self, 
                data: object, 
+               ch_names: object,
                parent=None):
     
     super().__init__(parent)
     self.data = data
+    self.ch_names = ch_names
     
   def run(self):
     
     # For each channel...    
-    for i, k in enumerate(self.data.keys()):
+    for k, v in self.ch_names.items():
       
       # Run StarDist
-      self.data[k]['msk'] = models[i].predict_instances(img=normalize(self.data[k]['norm_img']),
+      self.data[v]['msk'] = models[k].predict_instances(img=normalize(self.data[v]['norm_img']),
                                                         prob_thresh=None,
                                                         nms_thresh=None)[0]
       
       # Compute submask area
-      self.data[k]['msk_area'] = funs.count_submsks_pixels(msk=self.data[k]['msk'])
+      self.data[v]['msk_area'] = funs.count_submsks_pixels(msk=self.data[v]['msk'])
               
     self.sig_output.emit(self.data)
 
@@ -1025,26 +1026,28 @@ class FilterSizeWorker(QObject):
   def __init__(self, 
                data: object, 
                config: object,
+               ch_names: object,
                parent=None):
     
     super().__init__(parent)
     self.data = data
     self.config = config
+    self.ch_names = ch_names
     
   def run(self):
     
     # For each channel...
-    for i, k in enumerate(self.data.keys()):
+    for k, v in self.ch_names.items():
       
       # Extract config
-      ch_config = self.config['channels'][i]
+      ch_config = self.config['channels'][k]
       
       # Discard small submasks
-      self.data[k]['filt_msk'] = funs.discard_small_submsks(msk=self.data[k]['msk'], 
-                                                            pix_dict=self.data[k]['msk_area'],
+      self.data[v]['filt_msk'] = funs.discard_small_submsks(msk=self.data[v]['msk'], 
+                                                            pix_dict=self.data[v]['msk_area'],
                                                             min_n_pix=ch_config['min_n_pix'])
       
-      self.data[k]['filt_msk_edited'] = self.data[k]['filt_msk'].copy()
+      self.data[v]['filt_msk_edited'] = self.data[v]['filt_msk'].copy()
               
     self.sig_output.emit(self.data)
     
@@ -1058,16 +1061,20 @@ class ApplyEditsWorker(QObject):
   def __init__(self, 
                layers: object,
                data: object, 
+               config: object,
+               ch_names: object,
                parent=None):
     
     super().__init__(parent)
     self.layers = layers
     self.data = data
+    self.config = config
+    self.ch_names = ch_names
     
   def run(self):
     
     # For each channel...
-    for k in self.data.keys():
+    for k in self.ch_names.values():
       
       # Retrieve user-edited cell predictions
       self.data[k]['filt_msk_edited'] = self.layers[k]['labels_layer'].data.copy()
@@ -1093,7 +1100,40 @@ class ApplyEditsWorker(QObject):
           if j not in self.data[k]['msk_area'].keys():
             
             self.data[k]['msk_area'][j] = tmp[j]
+      
+      self.data[k]['filt_cnt_edited'] = funs.msk_to_cnts(msk=self.data[k]['filt_msk_edited'])
                     
+    # Produce base merge image 
+    ch0 = self.data[self.ch_names[0]]['norm_img'].astype(np.float32)
+    ch1 = self.data[self.ch_names[1]]['norm_img'].astype(np.float32)
+
+    c0_r, c0_g, c0_b, _ = to_rgba(self.config['channels'][0]['color'])
+    c1_r, c1_g, c1_b, _ = to_rgba(self.config['channels'][1]['color'])
+
+    scale = 0.8
+    merge_r = scale * (ch0 * c0_r + ch1 * c1_r)
+    merge_g = scale * (ch0 * c0_g + ch1 * c1_g)
+    merge_b = scale * (ch0 * c0_b + ch1 * c1_b)
+
+    merge_norm_img = np.stack([merge_r, merge_g, merge_b], axis=-1)
+    merge_norm_img = np.clip(merge_norm_img, 0, 255).astype(np.uint8)
+    
+    self.data['merge'] = {'merge_norm_img': merge_norm_img.copy()}
+    
+    # Add ch0 / ch1 ROIs to merge image
+    for i, j in zip([self.ch_names[0], 
+                     self.ch_names[1]],
+                    [(int(c0_r*255), int(c0_g*255), int(c0_b*255)), 
+                     (int(c1_r*255), int(c1_g*255), int(c1_b*255))]):
+      
+      merge_norm_img = cv2.drawContours(image=merge_norm_img,
+                                        contours=self.data[i]['filt_cnt_edited'], 
+                                        contourIdx=-1,
+                                        color=j,
+                                        thickness=4)
+
+    self.data['merge']['merge_norm_img_rois'] = merge_norm_img
+    
     self.sig_output.emit(self.data)
         
 # %% OverlapWorker() ----
@@ -1106,30 +1146,33 @@ class OverlapWorker(QObject):
   def __init__(self, 
                data: object, 
                config: object,
+               ch_names: object,
                parent=None):
     
     super().__init__(parent)
     self.data = data
     self.config = config
-    for i, j in zip(['ch0_nm', 'ch1_nm'], self.data.keys()):
-      setattr(self, i, j)
+    self.ch_names = ch_names
     self.elem_list = None
     
   def run(self):
     
+    ch0_nm = self.ch_names[0]
+    ch1_nm = self.ch_names[1]
+    
     # Compute cell status 
-    self.data[self.ch0_nm][f'{self.ch1_nm}_status'], self.data[self.ch1_nm][f'{self.ch0_nm}_status'] = funs.get_submsks1_submsks2_status(
-      msk1=self.data[self.ch0_nm]['filt_msk_edited'], 
-      msk2=self.data[self.ch1_nm]['filt_msk_edited'], 
+    self.data[ch0_nm][f'{ch1_nm}_status'], self.data[ch1_nm][f'{ch0_nm}_status'] = funs.get_submsks1_submsks2_status(
+      msk1=self.data[ch0_nm]['filt_msk_edited'], 
+      msk2=self.data[ch1_nm]['filt_msk_edited'], 
       min_pct_ovl_1by2=self.config['min_pct_ovl_ch0_by_ch1'],
       min_pct_ovl_2by1=self.config['min_pct_ovl_ch1_by_ch0'],
-      submsks1_pix_dict=self.data[self.ch0_nm]['msk_area'],
-      submsks2_pix_dict=self.data[self.ch1_nm]['msk_area']
+      submsks1_pix_dict=self.data[ch0_nm]['msk_area'],
+      submsks2_pix_dict=self.data[ch1_nm]['msk_area']
       )
     
     # For each channel...
-    for i, j in zip([self.ch0_nm, self.ch1_nm],
-                    [self.ch1_nm, self.ch0_nm]):
+    for i, j in zip([ch0_nm, ch1_nm],
+                    [ch1_nm, ch0_nm]):
       
       # Produce cell status summary
       summary = {k:len(v) for k, v in self.data[i][f'{j}_status'].items()}
@@ -1142,39 +1185,31 @@ class OverlapWorker(QObject):
         status_dict=self.data[i][f'{j}_status']
         )
     
-    # Produce merge image 
-    ch0 = self.data[self.ch0_nm]['norm_img'].astype(np.float32)
-    ch1 = self.data[self.ch1_nm]['norm_img'].astype(np.float32)
-
+    # Add status ROIs to merge image
     c0_r, c0_g, c0_b, _ = to_rgba(self.config['channels'][0]['color'])
     c1_r, c1_g, c1_b, _ = to_rgba(self.config['channels'][1]['color'])
-
-    scale = 0.8
-    merge_r = scale * (ch0 * c0_r + ch1 * c1_r)
-    merge_g = scale * (ch0 * c0_g + ch1 * c1_g)
-    merge_b = scale * (ch0 * c0_b + ch1 * c1_b)
-
-    merge_norm_img = np.stack([merge_r, merge_g, merge_b], axis=-1)
-    merge_norm_img = np.clip(merge_norm_img, 0, 255).astype(np.uint8)
         
     status_colors_ch0 = {'neg': (int(c0_r*255), int(c0_g*255), int(c0_b*255)),
                          'pos': (0, 255, 0),
                          'amb': (255, 255, 0)}
     
+    merge_norm_img = self.data['merge']['merge_norm_img'].copy()
+    
     for i, j in status_colors_ch0.items():
       
       merge_norm_img = cv2.drawContours(image=merge_norm_img,
-                                        contours=self.data[self.ch0_nm]['cnt'][i], 
+                                        contours=self.data[ch0_nm]['cnt'][i], 
                                         contourIdx=-1,
                                         color=j,
                                         thickness=4)
 
     merge_norm_img = cv2.drawContours(image=merge_norm_img,
-                                      contours=self.data[self.ch1_nm]['cnt']['neg'],
+                                      contours=self.data[ch1_nm]['cnt']['neg'],
                                       contourIdx=-1,
                                       color=(int(c1_r*255), int(c1_g*255), int(c1_b*255)),
                                       thickness=4)
 
-    self.data[self.ch0_nm]['merge_norm_img'] = merge_norm_img
+    self.data['merge']['merge_norm_img_status'] = merge_norm_img
+    
     self.sig_output.emit(self.data)
     

@@ -1,6 +1,7 @@
 # %% Import required libraries ----
 
 import os
+import math
 import numpy as np
 import pandas as pd
 import subprocess
@@ -715,6 +716,11 @@ def txt_to_elem_dfs(file: str) -> list:
                    sep='\t',
                    skiprows=7)
   
+  # Remove empty row between column names and first element header
+  # => This empty row occurs for .txt files produced by napari-bruce but not by PALM RoboSoftware
+  if isinstance(df.iloc[0,0], float) and math.isnan(df.iloc[0,0]):
+    df = df.iloc[1:, :]
+    
   # Record rows corresponding to element headers
   # => Rows where column 'No' does not contains ',' nor a missing value
   df['is_header'] = ~ (df['No'].astype(str).str.contains(',').astype(bool) | 
@@ -798,7 +804,7 @@ def scale_elem_cnt(elem_cnt: np.ndarray,
   
   Args:
     elem_cnt (numpy.ndarray): element-specific contours as an array of shape (N, 2).
-    metadata_dict (dict): metadata sub-dict produced by load_palm_zvi().
+    metadata_dict (dict): metadata sub-dict produced by load_ome_tiff().
     to (str): either 'image' or 'PALM'.
   
   Returns:
@@ -817,15 +823,31 @@ def scale_elem_cnt(elem_cnt: np.ndarray,
   img_size_x = metadata_dict['image']['size_x']
   img_size_y = metadata_dict['image']['size_y']
   
+  objective = int(metadata_dict['objectives']['nominal_magnification'])
+  
+  if objective not in [10, 20]:
+    
+    raise NotImplementedError(f'Contour scaling not implemented for {objective}X objective yet.')
+
   # Compute offset
-  offset = (((img_size_x / img_size_y) -1) * 100)
+  if objective == 20:
+    
+    offset_x = (((img_size_x / img_size_y) -1) * 100)
+    
+    offset_y = - offset_x
+  
+  if objective == 10:
+    
+    offset_x = - ((img_size_x / img_size_y) * 100)
+    
+    offset_y = - (((img_size_x / img_size_y) * 100) / 2)
   
   ### Rescale to PALM RoboSoftware
   if to == 'PALM':
     
     # Adjust x position
-    # 1) x = x - offset
-    cnt[:, 0] = cnt[:, 0] - offset
+    # 1) x = x - offset_x
+    cnt[:, 0] = cnt[:, 0] - offset_x
 
     # 2) x = x / (1 + [(1 / image size x) * 100]) 
     cnt[:, 0] = cnt[:, 0] / (1 + ((1 / img_size_x) * 100))
@@ -834,8 +856,8 @@ def scale_elem_cnt(elem_cnt: np.ndarray,
     cnt[:, 0] = (img_size_x / 2) - cnt[:, 0]
     
     # Adjust y position  
-    # 1) y = y + offset
-    cnt[:, 1] = cnt[:, 1] + offset
+    # 1) y = y - offset_y
+    cnt[:, 1] = cnt[:, 1] - offset_y
 
     # 2) y = [(image size y / 2) - y] / (1 + [(1 / image size y) * 100])
     cnt[:, 1] = ((img_size_y / 2) - cnt[:, 1]) / (1 + ((1 / img_size_y) * 100)) 
@@ -867,15 +889,15 @@ def scale_elem_cnt(elem_cnt: np.ndarray,
     # 2) x = x + [(x / image size x) * 100]
     cnt[:, 0] = cnt[:, 0] + ((cnt[:, 0] / img_size_x) * 100)
     
-    # 3) x = x + offset
-    cnt[:, 0] = cnt[:, 0] + offset
+    # 3) x = x + offset_x
+    cnt[:, 0] = cnt[:, 0] + offset_x
   
     # Adjust y position
     # 1) y = (image size y / 2) - (y + [(y / image size y) * 100])  
     cnt[:, 1] = (img_size_y / 2) - (cnt[:, 1] + ((cnt[:, 1] / img_size_y) * 100)) 
   
-    # 2) y = y - offset
-    cnt[:, 1] = cnt[:, 1] - offset
+    # 2) y = y + offset_y
+    cnt[:, 1] = cnt[:, 1] + offset_y
   
   output = cnt
     
@@ -890,7 +912,7 @@ def get_palm_elem(file: str,
   
   Args:
     file (str): path to PALM .txt file.
-    metadata_dict (dict): metadata sub-dict produced by load_palm_zvi().
+    metadata_dict (dict): metadata sub-dict produced by load_ome_tiff().
   
   Returns:
     dict: dict of element-specific dicts. Each sub-dict contains metadata and element contours.
@@ -1003,10 +1025,9 @@ def make_elem_txt(data_dict: dict,
   header = f'''PALMRobo Elements
 Version:	V 4.9.0.0
 Date, Time :	{date_time}
-  
+
 MICROMETER
-Elements :
-  
+Elements :\n
 '''
 
   ch0_nm = metadata_dict['channels'][0]['name']
