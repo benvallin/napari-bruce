@@ -2,6 +2,23 @@
 
 print(f'\nStarting napari-bruce 🦇...\n')
 
+# Load configuration
+import napari_bruce.configuration as configuration
+
+config = configuration.get_config()
+
+# Create configuration from default if config file does not exist
+if config is None:
+  
+  config = configuration.make_default_config()
+
+# Check config dict integrity and convert config['channels'] keys to int if read from json file 
+else:
+  
+  configuration.check_config_integrity(config=config)
+  
+  config['channels'] = {int(k):v for k, v in config['channels'].items()}
+  
 # Import required libraries
 print(f'\n\t⏳ Loading dependencies\n')
 
@@ -10,27 +27,14 @@ import copy
 import numpy as np
 import cv2
 import json
+import importlib.resources
 from matplotlib.colors import to_rgba
 from pathlib import Path
 from qtpy.QtWidgets import QPushButton, QWidget, QLabel, QVBoxLayout, QFileDialog, QDoubleSpinBox, QHBoxLayout, QApplication
 from qtpy.QtCore import Signal, QObject, QThread, QTimer
 from csbdeep.utils import normalize
 from contextlib import redirect_stdout, redirect_stderr
-import napari_bruce.configuration as configuration
 import napari_bruce.workflow as workflow
-
-# Load configuration
-config = configuration.get_config()
-
-# Create configuration from default if config file does not exist
-if config is None:
-  
-  config = configuration.make_default_config()
-  
-# Convert config['channels'] keys to int if read from json file 
-else:
-  
-  config['channels'] = {int(k):v for k, v in config['channels'].items()}
             
 # Import StarDist and define models 
 print(f'\t⏳ Loading StarDist models\n')
@@ -41,9 +45,37 @@ with open(os.devnull, 'w') as f, redirect_stdout(f), redirect_stderr(f):
   
   from stardist.models import StarDist2D
   
-  models = {0: StarDist2D(None, name=config['channels'][0]['stardist_model'], basedir=Path(config['stardist_models_dir_path']).expanduser()),
-            1: StarDist2D(None, name=config['channels'][1]['stardist_model'], basedir=Path(config['stardist_models_dir_path']).expanduser())}
-
+  pretrained = [k for k, v in configuration.list_stardist_models().items() if v == 'pretrained']
+  
+  models = {}
+  
+  for i in [0, 1]:
+    
+    model_nm = config['channels'][i]['stardist_model']
+    
+    if model_nm in pretrained:
+      
+      models[i] = StarDist2D.from_pretrained(model_nm)
+    
+    else:
+      
+      stardist_models_dir_path = os.path.join(importlib.resources.files('napari_bruce'), 
+                                              'stardist_models')
+      
+      model_dir_path = os.path.join(stardist_models_dir_path, model_nm)
+      
+      if not os.path.exists(model_dir_path):
+        
+        raise FileNotFoundError(f"Model '{model_nm}' does not exist at: {stardist_models_dir_path}.")
+      
+      if not os.path.isdir(model_dir_path):
+        
+        raise NotADirectoryError(f"'{model_nm}' is not a directory at: {stardist_models_dir_path}.")
+      
+      models[i] = StarDist2D(None, 
+                             name=model_nm, 
+                             basedir=stardist_models_dir_path)
+  
 print(f'\n*** 🟢 Program is ready ***\n')
 
 # %% ParamValueBox() ----
