@@ -16,7 +16,7 @@ A napari plugin for the analysis of PALM RoboSoftware 4.5 images using StarDist 
 
 ## System requirements
 
-- Mamba (preferred) / Conda
+- Mamba (preferred) / Conda<br>
 The Miniforge can be installed from: https://github.com/conda-forge/miniforge
 
 ---
