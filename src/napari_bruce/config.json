@@ -1,6 +1,6 @@
 {
-  "in_dir_path": "~/Documents/rwm_lab/lcmseq_project/2025.10.31_palm_image",
-  "out_dir_path": "~/Desktop/napari_bruce_results",
+  "in_dir_path": "/Users/benjaminvallin",
+  "out_dir_path": "/Users/benjaminvallin/napari_bruce_results",
   "channels": {
     "0": {
       "name": "TH",

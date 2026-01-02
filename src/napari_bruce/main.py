@@ -1,24 +1,7 @@
 # %% Set up ----
 
 print(f'\nStarting napari-bruce 🦇...\n')
-
-# Load configuration
-import napari_bruce.configuration as configuration
-
-config = configuration.get_config()
-
-# Create configuration from default if config file does not exist
-if config is None:
-  
-  config = configuration.make_default_config()
-
-# Check config dict integrity and convert config['channels'] keys to int if read from json file 
-else:
-  
-  configuration.check_config_integrity(config=config)
-  
-  config['channels'] = {int(k):v for k, v in config['channels'].items()}
-  
+    
 # Import required libraries
 print(f'\n\t⏳ Loading dependencies\n')
 
@@ -34,8 +17,15 @@ from qtpy.QtWidgets import QPushButton, QWidget, QLabel, QVBoxLayout, QFileDialo
 from qtpy.QtCore import Signal, QObject, QThread, QTimer
 from csbdeep.utils import normalize
 from contextlib import redirect_stdout, redirect_stderr
+import napari_bruce.configuration as configuration
 import napari_bruce.workflow as workflow
-            
+
+# Load configuration
+config = configuration.get_config()
+
+# Convert config['channels'] keys to int if read from json file 
+config['channels'] = {int(k):v for k, v in config['channels'].items()}
+              
 # Import StarDist and define models 
 print(f'\t⏳ Loading StarDist models\n')
 
@@ -61,16 +51,6 @@ with open(os.devnull, 'w') as f, redirect_stdout(f), redirect_stderr(f):
       
       stardist_models_dir_path = os.path.join(importlib.resources.files('napari_bruce'), 
                                               'stardist_models')
-      
-      model_dir_path = os.path.join(stardist_models_dir_path, model_nm)
-      
-      if not os.path.exists(model_dir_path):
-        
-        raise FileNotFoundError(f"Model '{model_nm}' does not exist at: {stardist_models_dir_path}.")
-      
-      if not os.path.isdir(model_dir_path):
-        
-        raise NotADirectoryError(f"'{model_nm}' is not a directory at: {stardist_models_dir_path}.")
       
       models[i] = StarDist2D(None, 
                              name=model_nm, 

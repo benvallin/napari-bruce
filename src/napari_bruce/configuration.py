@@ -46,13 +46,13 @@ def get_config() -> dict:
         
         return output
     
-    except json.JSONDecodeError as e:
+    except json.JSONDecodeError:
       
-      raise ValueError(f'Invalid JSON in config file: {e}') from e
+      raise ValueError(f'Invalid JSON in config file.')
 
-    except OSError as e:
+    except OSError:
       
-      raise OSError(f'Could not read config file: {e}') from e
+      raise OSError(f'Could not read config file.')
   
   else:
   
@@ -92,6 +92,12 @@ def list_stardist_models() -> dict:
 
 # %% check_config_integrity() ----
 
+class ConfigError(RuntimeError):
+    
+    """Raised when the napari-bruce configuration is invalid."""
+    
+    pass
+  
 def check_config_integrity(config: dict) -> None:
 
   """Check the integrity of the config dict.
@@ -103,12 +109,6 @@ def check_config_integrity(config: dict) -> None:
     Raises a ConfigError if config is not a dict or a malformed dict.
 
   """
-  
-  class ConfigError(RuntimeError):
-    
-    """Raised when the napari-bruce configuration is invalid."""
-    
-    pass
       
   if not isinstance(config, dict):
     
