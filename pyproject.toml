@@ -18,7 +18,11 @@ include-package-data = true
 where = ["src"]
 
 [tool.setuptools.package-data]
-"*" = ["*.yaml", "bf/bioformats_package.jar"]
+"napari_bruce" = [
+    "*.yaml",
+    "bf/bioformats_package.jar",
+    "stardist_models/**/*",
+]
 
 [project.entry-points."napari.manifest"]
 napari-bruce = "napari_bruce:napari.yaml"
