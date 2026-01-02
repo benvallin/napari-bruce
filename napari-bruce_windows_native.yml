@@ -1,0 +1,23 @@
+name: napari-bruce
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.10
+  - numpy=1.26.4          
+  - napari
+  - pyqt
+  - opencv
+  - csbdeep
+  - ome-types
+  - pandas
+  - matplotlib
+  - tifffile
+  - openjdk
+  - cudatoolkit=11.2      
+  - cudnn=8.1.0           
+  - pip
+  - pip:
+      - "tensorflow<2.11" 
+      - stardist          

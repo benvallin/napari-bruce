@@ -1,11 +1,9 @@
-To run napari-bruce:
+# Create environment
+mamba env create -f napari-bruce_windows_native.yml
+mamba activate napari-bruce   
 
-1) Create environment:
- mamba create env -f path_to/napari-bruce.yml
+# Install napari-bruce 
+python -m pip install "git+https://github.com/benvallin/napari-bruce.git"
 
-2) Install napari-bruce within environment:
- mamba activate napari-bruce
- python -m pip install path_to/napari-bruce
-
-3) Run napari with napari-bruce plugin:
- napari --with napari-bruce
+# Run napari-bruce 
+bruce -h
