@@ -18,6 +18,7 @@ dependencies:
   - cudatoolkit=11.2      
   - cudnn=8.1.0           
   - pip
+  - git
   - pip:
       - "tensorflow<2.11" 
       - stardist          

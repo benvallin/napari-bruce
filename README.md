@@ -1,12 +1,12 @@
 # ***Bruce***
 
-A napari plugin for PALM RoboSoftware 4.5 image analysis using StarDist segmentation.
+A napari plugin for the analysis of PALM RoboSoftware 4.5 images using StarDist segmentation.
 
 ---
 
 ## Features
 
-- Load PALM `.zvi` images
+- Load `.zvi` images from PALM RoboSoftware 4.5
 - StarDist-based cell segmentation
 - Manual ROI editing
 - Overlap analysis between channels
@@ -14,12 +14,18 @@ A napari plugin for PALM RoboSoftware 4.5 image analysis using StarDist segmenta
 
 ---
 
+## System requirements
+
+- Mamba (preferred) / Conda
+The Miniforge can be installed from: https://github.com/conda-forge/miniforge
+
+---
+
 ## Installation
 
 ### Windows
 
-Install miniforge from: https://github.com/conda-forge/miniforge<br>
-
+In a Miniforge Prompt:<br>
 ```bash
 # Create environment
 mamba env create -f napari-bruce_windows_native.yml
