@@ -30,7 +30,7 @@ In a Miniforge Prompt:<br>
 # Create environment
 mamba env create -f napari-bruce_windows_native.yml
 # Activate environment
-mamba activate napari-bruce
+mamba activate bruce-env
 # Install napari-bruce
 python -m pip install "git+https://github.com/benvallin/napari-bruce.git". 
 # Run napari-bruce 

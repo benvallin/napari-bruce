@@ -74,6 +74,12 @@ def main(argv: list[str] | None = None) -> None:
       action='store_true',
       help='list available StarDist models.',
       )
+    
+    parser.add_argument(
+      '--gpu-status',
+      action='store_true',
+      help='check if GPU(s) are visible to TensorFlow.',
+      )
   
     args = parser.parse_args(argv)
   
@@ -117,6 +123,17 @@ def main(argv: list[str] | None = None) -> None:
       models = '\n- '.join(f'{k}: {v}' for k, v in models.items())
       print(f'Available StarDist models:\n- {models}')
     
+      return
+    
+    if args.gpu_status:
+    
+      from tensorflow.config import list_physical_devices
+      gpus = list_physical_devices('GPU')
+      if gpus: 
+        print(f'🟢 StarDist runs on GPU.\nGPU(s) visible to TensorFlow: {gpus}')
+      else:
+        print('🔴 Stardist runs on CPU.')
+      
       return
     
     config = configuration.get_config()

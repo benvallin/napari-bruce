@@ -22,7 +22,6 @@ napari_bruce_output/
 .DS_Store
 
 # Models (if large)
-#*.h5
 *.pb
 models/
 

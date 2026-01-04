@@ -1,10 +1,12 @@
 [project]
 name = "napari-bruce"
 version = "0.0.1"
-requires-python = ">=3.10,<3.11"
-classifiers = [
-    "Framework :: napari",
-]
+description = "A napari plugin for PALM image analysis"
+readme = "README.md"
+requires-python = ">=3.9"
+classifiers = ["Framework :: napari"]
+license = { text = "MIT" }
+authors = [{ name = "Benjamin Vallin", email = "ben.vallin@gmail.com" }]
 dependencies = []
 
 [build-system]
@@ -20,7 +22,7 @@ where = ["src"]
 [tool.setuptools.package-data]
 "napari_bruce" = [
     "*.yaml",
-    "bf/bioformats_package.jar",
+    "bioformats/bioformats_package.jar",
     "stardist_models/**/*",
 ]
 
@@ -29,3 +31,10 @@ napari-bruce = "napari_bruce:napari.yaml"
 
 [project.scripts]
 bruce = "napari_bruce.cli:main"
+
+
+
+
+
+
+
