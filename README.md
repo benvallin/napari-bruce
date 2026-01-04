@@ -24,16 +24,16 @@ The Miniforge can be installed from: https://github.com/conda-forge/miniforge
 ## Installation
 
 Platform-specific `.yml` files to create the bruce-env environment containing all required dependencies are available in `env`.<br>
-- Windows (native): `napari-bruce_windows_native.yml`<br>
-- macOS (ARM): `napari-bruce_macos_arm.yml`<br>
-- linux: `napari-bruce_linux.yml`<br>
+- Windows (native): `bruce-env_windows_native.yml`<br>
+- macOS (ARM): `bruce-env_macos_arm.yml`<br>
+- linux: `bruce-env_linux.yml`<br>
 
 ### Windows
 
 In a Miniforge Prompt:<br>
 ```bash
 # Create environment
-mamba env create -f napari-bruce_windows_native.yml
+mamba env create -f bruce-env_windows_native.yml
 # Activate environment
 mamba activate bruce-env
 # Install napari-bruce
