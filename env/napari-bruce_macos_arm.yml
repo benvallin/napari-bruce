@@ -17,6 +17,6 @@ dependencies:
   - openjdk     
   - pip
   - pip:
-      - "tensorflow>=2.13" 
+      - tensorflow-macos
       - tensorflow-metal
       - stardist          

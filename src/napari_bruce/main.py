@@ -966,7 +966,7 @@ class LoadWorker(QObject):
     # Convert PALM .zvi file to OME-TIFF
     workflow.convert_zvi_to_ome(file=self.path, 
                                 out_dir_path=out_dir_path,
-                                jar_pkg='napari_bruce.bf',
+                                jar_pkg='napari_bruce.bioformats',
                                 jar_name='bioformats_package.jar')
     
     # Load images and associated metadata

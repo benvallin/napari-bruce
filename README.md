@@ -1,6 +1,6 @@
 # ***Bruce***
 
-A napari plugin for the analysis of PALM RoboSoftware 4.5 images using StarDist segmentation.
+A napari plugin for drawing PALM RoboSoftware elements using StarDist segmentation.
 
 ---
 
@@ -22,6 +22,11 @@ The Miniforge can be installed from: https://github.com/conda-forge/miniforge
 ---
 
 ## Installation
+
+Platform-specific `.yml` files to create the bruce-env environment containing all required dependencies are available in `env`.<br>
+- Windows (native): `napari-bruce_windows_native.yml`<br>
+- macOS (ARM): `napari-bruce_macos_arm.yml`<br>
+- linux: `napari-bruce_linux.yml`<br>
 
 ### Windows
 

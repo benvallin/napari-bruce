@@ -555,7 +555,7 @@ def pickle_data(data: Any,
     
 def convert_zvi_to_ome(file: str, 
                        out_dir_path: str, 
-                       jar_pkg: str = 'napari_bruce.bf',
+                       jar_pkg: str = 'napari_bruce.bioformats',
                        jar_name: str = 'bioformats_package.jar', 
                        java_opts: list | None = None,
                        timeout: float | None = 300.0) -> None:
