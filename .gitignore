@@ -12,18 +12,11 @@ build/
 venv/
 *.venv/
 
-# Data
-*.zvi
-*.ome.tiff
-output/
-napari_bruce_output/
-
 # OS files
 .DS_Store
 
-# Models (if large)
-*.pb
-models/
-
+# Dev hide
 deprecated/
 other/
+config.json
+
