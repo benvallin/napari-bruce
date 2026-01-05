@@ -1,6 +1,6 @@
 # ***🦇 Bruce***
 
-A **napari plugin for drawing PALM RoboSoftware elements using StarDist segmentation**
+**A napari plugin for drawing PALM RoboSoftware elements using StarDist segmentation**
 
 
 ---
@@ -8,7 +8,7 @@ A **napari plugin for drawing PALM RoboSoftware elements using StarDist segmenta
 
 ## Quick start
 
-After installation (see below):
+After installation (see below), open a terminal and run:
 
 ```bash
 # Launch Bruce via the command line
