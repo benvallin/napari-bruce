@@ -45,47 +45,41 @@ def cli_main(argv: list[str] | None = None) -> None:
       prog='bruce',
       description='Command-line interface for the napari-bruce plugin.',
       )
-    
-    parser.add_argument(
-      '-h', '--help',
-      action='help',
-      help='show this help message and exit.',
-      )
   
     parser.add_argument(
       '--show-config-path',
       action='store_true',
-      help='print the path of the configuration file and exit.',
+      help='print the path of the configuration file and exit',
       )
   
     parser.add_argument(
       '--edit-config',
       action='store_true',
-      help='open the configuration file in the default editor.',
+      help='open the configuration file in the default editor',
       )
   
     parser.add_argument(
       '--reset-config',
       action='store_true',
-      help='reset the configuration to defaults and exit.',
+      help='reset the configuration to defaults and exit',
       )
     
     parser.add_argument(
       '--gpu-status',
       action='store_true',
-      help='check if GPU(s) are visible to TensorFlow.',
+      help='check if GPU(s) are visible to TensorFlow',
       )
     
     parser.add_argument(
       '--list-models',
       action='store_true',
-      help='list available StarDist models.',
+      help='list available StarDist models',
       )
   
     parser.add_argument(
       '--add-model',
       metavar='MODEL_DIR',
-      help='add the StarDist model located at MODEL_DIR to napari-bruce.',
+      help='add the StarDist model located at MODEL_DIR to napari-bruce',
       )
   
     args = parser.parse_args(argv)
