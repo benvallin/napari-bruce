@@ -45,6 +45,12 @@ def cli_main(argv: list[str] | None = None) -> None:
       prog='bruce',
       description='Command-line interface for the napari-bruce plugin.',
       )
+    
+    parser.add_argument(
+      '-h', '--help',
+      action='help',
+      help='show this help message and exit.',
+      )
   
     parser.add_argument(
       '--show-config-path',
@@ -63,23 +69,23 @@ def cli_main(argv: list[str] | None = None) -> None:
       action='store_true',
       help='reset the configuration to defaults and exit.',
       )
-  
-    parser.add_argument(
-      '--add-model',
-      metavar='MODEL_DIR',
-      help='add the StarDist model located at MODEL_DIR to napari-bruce.',
-      )
-  
-    parser.add_argument(
-      '--list-models',
-      action='store_true',
-      help='list available StarDist models.',
-      )
     
     parser.add_argument(
       '--gpu-status',
       action='store_true',
       help='check if GPU(s) are visible to TensorFlow.',
+      )
+    
+    parser.add_argument(
+      '--list-models',
+      action='store_true',
+      help='list available StarDist models.',
+      )
+  
+    parser.add_argument(
+      '--add-model',
+      metavar='MODEL_DIR',
+      help='add the StarDist model located at MODEL_DIR to napari-bruce.',
       )
   
     args = parser.parse_args(argv)
@@ -110,21 +116,6 @@ def cli_main(argv: list[str] | None = None) -> None:
       print(f'Configuration reset to defaults at:\n{config_path}')
     
       return
-  
-    if args.add_model is not None:
-    
-      configuration.add_stardist_model(args.add_model)
-      print(f'Added StarDist model from:\n{args.add_model}')
-    
-      return
-  
-    if args.list_models:
-    
-      models = configuration.list_stardist_models()
-      models = '\n- '.join(f'{k}: {v}' for k, v in models.items())
-      print(f'Available StarDist models:\n- {models}')
-    
-      return
     
     if args.gpu_status:
     
@@ -137,6 +128,21 @@ def cli_main(argv: list[str] | None = None) -> None:
       
       return
     
+    if args.list_models:
+    
+      models = configuration.list_stardist_models()
+      models = '\n- '.join(f'{k}: {v}' for k, v in models.items())
+      print(f'Available StarDist models:\n- {models}')
+    
+      return
+  
+    if args.add_model is not None:
+    
+      configuration.add_stardist_model(args.add_model)
+      print(f'Added StarDist model from:\n{args.add_model}')
+    
+      return
+  
     configuration.get_config()
     
     if shutil.which('java') is None:
