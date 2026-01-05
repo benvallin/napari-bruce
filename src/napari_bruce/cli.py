@@ -145,6 +145,12 @@ def main(argv: list[str] | None = None) -> None:
     else:
   
       configuration.check_config_integrity(config=config)
+    
+    import shutil
+    
+    if shutil.which('java') is None:
+      
+      raise RuntimeError('napari-bruce requires Java (OpenJDK).\nPlease install OpenJDK and ensure `java` is on your PATH.')
       
     launch_napari_with_plugin()
     
