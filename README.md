@@ -47,8 +47,7 @@ bruce -h
 
 ## Installation
 
-Bruce requires a **platform-specific Conda environment** due to differences in GPU support and native dependencies (TensorFlow, CUDA, Java).<br>
-Predefined environment files are provided in the `env/` directory:
+Bruce requires a **platform-specific Conda environment** due to differences in native dependencies and GPU support. Predefined environment files are provided in the `env/` directory:
 ```md
 | Platform | Environment file |
 |--------|------------------|
