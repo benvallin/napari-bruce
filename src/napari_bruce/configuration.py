@@ -23,41 +23,6 @@ def get_config_file_path() -> str:
   
   return output
 
-# %% get_config() ----
-
-def get_config() -> dict:
-
-  """Read configuration from config.json file.
-  
-  Returns:
-    dict: dict representing configuration or None if config.json file does not exist.
-
-  """
-    
-  path = get_config_file_path()
-  
-  if os.path.exists(path):
-    
-    try:
-      
-      with open(path, 'r', encoding='utf-8') as f:
-        
-        output = json.load(f)
-        
-        return output
-    
-    except json.JSONDecodeError:
-      
-      raise ValueError(f'Invalid JSON in config file.')
-
-    except OSError:
-      
-      raise OSError(f'Could not read config file.')
-  
-  else:
-  
-    return None
-
 # %% list_stardist_models() ----
 
 def list_stardist_models() -> dict:
@@ -224,6 +189,42 @@ def make_default_config() -> dict:
   with open(path, 'w') as f:
     
     json.dump(output, f, indent=2)
+  
+  return output
+# %% get_config() ----
+
+def get_config() -> dict:
+
+  """Read configuration from config.json file and check integrity.
+  
+  Returns:
+    dict: dict representing configuration. If config.json file does not exist, creates it and returns default config.
+
+  """
+    
+  path = get_config_file_path()
+  
+  if os.path.exists(path):
+    
+    try:
+      
+      with open(path, 'r', encoding='utf-8') as f:
+        
+        output = json.load(f)
+        
+    except json.JSONDecodeError:
+      
+      raise ValueError(f'Invalid JSON in config file.')
+
+    except OSError:
+      
+      raise OSError(f'Could not read config file.')
+    
+    check_config_integrity(config=output)
+        
+  else:
+    
+    output = make_default_config()
   
   return output
 

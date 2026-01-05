@@ -6,6 +6,7 @@ import sys
 import argparse
 import subprocess
 import napari_bruce.configuration as configuration
+import napari_bruce.workflow as workflow
 
 # %% launch_napari_with_plugin() ----
 
@@ -136,22 +137,10 @@ def main(argv: list[str] | None = None) -> None:
       
       return
     
-    config = configuration.get_config()
-
-    if config is None:
-  
-      configuration.make_default_config()
-
-    else:
-  
-      configuration.check_config_integrity(config=config)
+    configuration.get_config()
     
-    import shutil
-    
-    if shutil.which('java') is None:
-      
-      raise RuntimeError('napari-bruce requires Java (OpenJDK).\nPlease install OpenJDK and ensure `java` is on your PATH.')
-      
+    workflow.require_java()
+
     launch_napari_with_plugin()
     
   except Exception as e:

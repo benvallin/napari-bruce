@@ -551,6 +551,24 @@ def pickle_data(data: Any,
     
     pickle.dump(sanitized, f, protocol=pickle.HIGHEST_PROTOCOL)
 
+# %% require_java() ----
+
+def require_java() -> str:
+  
+  """Look for java executable.
+    
+  Returns:
+    str: java executable. 
+
+  """
+  java_exe = shutil.which('java')
+  
+  if java_exe is None:
+    
+    raise RuntimeError('java not found on PATH; please install OpenJDK.')
+  
+  return java_exe
+  
 # %% convert_zvi_to_ome() ----
     
 def convert_zvi_to_ome(file: str, 
@@ -576,12 +594,8 @@ def convert_zvi_to_ome(file: str,
   """
   
   # Check java
-  java_exe = shutil.which('java')
+  java_exe = require_java()
   
-  if java_exe is None:
-    
-    raise RuntimeError('java not found on PATH; please install OpenJDK.')
-
   # Locate jar
   jar_path = importlib.resources.files(jar_pkg) / jar_name
   
