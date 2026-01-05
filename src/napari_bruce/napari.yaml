@@ -3,7 +3,7 @@ contributions:
   commands:
     - id: napari-bruce.run
       title: Bruce
-      python_name: napari_bruce.main:PluginManager
+      python_name: napari_bruce.widget:PluginManager
   widgets:
     - command: napari-bruce.run  
       display_name: Bruce

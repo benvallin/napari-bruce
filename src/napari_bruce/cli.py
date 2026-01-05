@@ -5,8 +5,8 @@ import os
 import sys
 import argparse
 import subprocess
+import shutil
 import napari_bruce.configuration as configuration
-import napari_bruce.workflow as workflow
 
 # %% launch_napari_with_plugin() ----
 
@@ -35,9 +35,9 @@ def launch_napari_with_plugin() -> None:
     raise SystemExit(1)
     
 
-# %% main() ----
+# %% cli_main() ----
 
-def main(argv: list[str] | None = None) -> None:
+def cli_main(argv: list[str] | None = None) -> None:
   
   try:
     
@@ -139,7 +139,9 @@ def main(argv: list[str] | None = None) -> None:
     
     configuration.get_config()
     
-    workflow.require_java()
+    if shutil.which('java') is None:
+      
+      raise RuntimeError('java not found on PATH; please install OpenJDK.')
 
     launch_napari_with_plugin()
     

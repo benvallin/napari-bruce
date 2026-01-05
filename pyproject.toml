@@ -1,16 +1,26 @@
 [project]
 name = "napari-bruce"
 version = "0.0.1"
-description = "A napari plugin for PALM image analysis"
+description = "A napari plugin for drawing PALM RoboSoftware elements using StarDist segmentation"
 readme = "README.md"
 requires-python = ">=3.9"
-classifiers = ["Framework :: napari"]
 license = { text = "MIT" }
 authors = [{ name = "Benjamin Vallin", email = "ben.vallin@gmail.com" }]
+
+classifiers = [
+  "Framework :: napari",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Operating System :: OS Independent",
+  "License :: OSI Approved :: MIT License",
+  "Intended Audience :: Science/Research",
+]
+
 dependencies = [
   "napari",
   "numpy>=1.26.4,<2.0",
-  "opencv-python",
+  "opencv-python-headless>=4.8",
   "ome-types",
   "pandas",
   "matplotlib",
@@ -41,11 +51,6 @@ where = ["src"]
 napari-bruce = "napari_bruce:napari.yaml"
 
 [project.scripts]
-bruce = "napari_bruce.cli:main"
-
-
-
-
-
+bruce = "napari_bruce.cli:cli_main"
 
 

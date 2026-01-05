@@ -1,43 +1,54 @@
-# ***Bruce***
+# ***🦇 Bruce***
 
-A napari plugin for drawing PALM RoboSoftware elements using StarDist segmentation.
+A **napari plugin** for drawing **PALM RoboSoftware** elements using **StarDist** segmentation
 
 ---
 
 ## Features
 
-- Load `.zvi` images from PALM RoboSoftware 4.5
-- StarDist-based cell segmentation
-- Manual ROI editing
-- Overlap analysis between channels
-- Export PALM-compatible ROI files
+- Load 2-channel images and metadata from `.zvi` files produced by PALM RoboSoftware 4.5
+- Perform StarDist-based cell segmentation (default or user-defined models)
+- Allow manual editing of ROIs / elements in napari
+- Perform ROI overlap analysis between 2 channels
+- Export element list as `.txt` file compatible with PALM RoboSoftware 4.5
 
 ---
 
 ## System requirements
 
-- Mamba (preferred) / Conda<br>
-The Miniforge can be installed from: https://github.com/conda-forge/miniforge
+- **Conda / Mamba** (recommended)
+  - Install Miniforge from: https://github.com/conda-forge/miniforge
+- **Java (OpenJDK)** – required for Bio-Formats `.zvi → OME-TIFF` conversion
+- **GPU (optional)** – for accelerated StarDist inference
 
 ---
 
 ## Installation
 
-Platform-specific `.yml` files to create the bruce-env environment containing all required dependencies are available in `env`.<br>
-- Windows (native): `bruce-env_windows_native.yml`<br>
-- macOS (ARM): `bruce-env_macos_arm.yml`<br>
-- linux: `bruce-env_linux.yml`<br>
+Bruce requires a **platform-specific Conda environment** due to differences in GPU support and native dependencies (TensorFlow, CUDA, Java).<br>
+Predefined `.yml` environment files are provided in the `env/` directory:
+```md
+| Platform | Environment file |
+|--------|------------------|
+| Windows (native) | `env/bruce-env_windows_native.yml` |
+| macOS (Apple Silicon) | `env/bruce-env_macos_arm.yml` |
+| Linux | `env/bruce-env_linux.yml` |
+```
 
-### Windows
-
-In a Miniforge Prompt:<br>
+Open a terminal and run:
 ```bash
-# Create environment
-mamba env create -f bruce-env_windows_native.yml
+# Create environment (replace `<ENV_FILE>` with the appropriate `.yml` file)
+mamba env create -f <ENV_FILE>
+
 # Activate environment
 mamba activate bruce-env
-# Install napari-bruce
-python -m pip install "git+https://github.com/benvallin/napari-bruce.git". 
-# Run napari-bruce 
-bruce -h
+
+# Install Bruce
+python -m pip install "git+https://github.com/benvallin/napari-bruce.git"
+
+# Launch plugin from CLI:
+bruce
+
+# Alternatively, launch plugin from napari:
+napari --with napari-bruce
 ```
