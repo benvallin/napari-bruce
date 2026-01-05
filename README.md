@@ -49,11 +49,11 @@ bruce -h
 
 Bruce requires a **platform-specific Conda environment** due to differences in native dependencies and GPU support. Predefined environment files are provided in the `env/` directory:
 ```md
-| Platform | Environment file |
-|--------|------------------|
-| Windows (native) | `env/bruce-env_windows_native.yml` |
-| macOS (Apple Silicon) | `env/bruce-env_macos_arm.yml` |
-| Linux | `env/bruce-env_linux.yml` |
+| Platform                | Environment file                     |
+|-------------------------|--------------------------------------|
+| Windows (native)        | `env/bruce-env_windows_native.yml`   |
+| macOS (Apple Silicon)   | `env/bruce-env_macos_arm.yml`        |
+| Linux                   | `env/bruce-env_linux.yml`            |
 ```
 
 Open a terminal and run:
@@ -102,7 +102,7 @@ bruce --reset-config
 
 ## GPU support & StarDist models 
 
-Bruce runs StarDist predictions on the GPU if visible to TensorFlow, and supports user-defined StarDist models.
+Bruce runs StarDist predictions on the GPU when visible to TensorFlow, and supports user-defined StarDist models.
 
 Useful commands:
 
