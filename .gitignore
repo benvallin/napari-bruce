@@ -16,7 +16,5 @@ venv/
 .DS_Store
 
 # Dev hide
-deprecated/
-other/
 config.json
 

@@ -116,3 +116,18 @@ bruce --list-models
 # Add a user-defined StarDist model (replace <MODEL_DIR> with the model directory)
 bruce --add-model <MODEL_DIR>
 ```
+
+
+---
+
+
+# Example images for napari-bruce
+
+Example `.zvi` files are provided in the `example_images/` directory for testing and demonstration purposes.
+
+They are NOT installed with the napari-bruce Python package.
+
+To use them:
+1. Clone or download the repository from GitHub
+2. Launch Bruce
+3. Load the example files via the GUI

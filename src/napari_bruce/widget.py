@@ -20,6 +20,9 @@ from contextlib import redirect_stdout, redirect_stderr
 import napari_bruce.configuration as configuration
 import napari_bruce.workflow as workflow
 
+# Check Java
+workflow.require_java()
+
 # Load configuration
 config = configuration.get_config()
 

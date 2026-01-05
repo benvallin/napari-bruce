@@ -593,7 +593,7 @@ def convert_zvi_to_ome(file: str,
 
   """
   
-  # Check java
+  # Check Java
   java_exe = require_java()
   
   # Locate jar
