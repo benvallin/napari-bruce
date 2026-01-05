@@ -65,8 +65,8 @@ mamba env create -f <ENV_FILE>
 # Activate the environment
 mamba activate bruce-env
 
-# Install Bruce from GitHub
-python -m pip install "git+https://github.com/benvallin/napari-bruce.git"
+# Install Bruce from PyPI
+pip install napari-bruce
 
 # Launch Bruce via the command line
 bruce
