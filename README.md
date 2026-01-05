@@ -1,6 +1,20 @@
-# ***🦇 Bruce***
+# ***🦇  Bruce***
 
-A **napari plugin** for drawing **PALM RoboSoftware** elements using **StarDist** segmentation
+A **napari plugin for drawing PALM RoboSoftware elements using StarDist segmentation**
+
+---
+
+## Quick start
+
+After installation (see below):
+
+```bash
+# Launch plugin from CLI:
+bruce
+
+# List available options with:
+bruce -h
+```
 
 ---
 
@@ -26,7 +40,7 @@ A **napari plugin** for drawing **PALM RoboSoftware** elements using **StarDist*
 ## Installation
 
 Bruce requires a **platform-specific Conda environment** due to differences in GPU support and native dependencies (TensorFlow, CUDA, Java).<br>
-Predefined `.yml` environment files are provided in the `env/` directory:
+Predefined environment files are provided in the `env/` directory:
 ```md
 | Platform | Environment file |
 |--------|------------------|
@@ -35,20 +49,44 @@ Predefined `.yml` environment files are provided in the `env/` directory:
 | Linux | `env/bruce-env_linux.yml` |
 ```
 
+```md
 Open a terminal and run:
+
 ```bash
-# Create environment (replace `<ENV_FILE>` with the appropriate `.yml` file)
+# Create the conda environment (replace <ENV_FILE> with the appropriate .yml file)
 mamba env create -f <ENV_FILE>
 
-# Activate environment
+# Activate the environment
 mamba activate bruce-env
 
-# Install Bruce
+# Install Bruce from GitHub
 python -m pip install "git+https://github.com/benvallin/napari-bruce.git"
 
-# Launch plugin from CLI:
+# Launch Bruce via the command line
 bruce
 
-# Alternatively, launch plugin from napari:
+# Or launch Bruce directly from napari
 napari --with napari-bruce
+
+---
+
+## Configuration
+
+Bruce stores its configuration in a user-specific JSON file.
+
+Useful commands:
+
+```bash
+# Show config file path
+bruce --show-config-path
+
+# Open config in default editor
+bruce --edit-config
+
+# Reset config to defaults
+bruce --reset-config
+
+# List available StarDist models
+bruce --list-models
+
 ```
