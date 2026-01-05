@@ -1,22 +1,26 @@
-# ***🦇  Bruce***
+# ***🦇 Bruce***
 
 A **napari plugin for drawing PALM RoboSoftware elements using StarDist segmentation**
 
+
 ---
+
 
 ## Quick start
 
 After installation (see below):
 
 ```bash
-# Launch plugin from CLI:
+# Launch Bruce via the command line
 bruce
 
-# List available options with:
+# List all available options 
 bruce -h
 ```
 
+
 ---
+
 
 ## Features
 
@@ -26,7 +30,9 @@ bruce -h
 - Perform ROI overlap analysis between 2 channels
 - Export element list as `.txt` file compatible with PALM RoboSoftware 4.5
 
+
 ---
+
 
 ## System requirements
 
@@ -35,7 +41,9 @@ bruce -h
 - **Java (OpenJDK)** – required for Bio-Formats `.zvi → OME-TIFF` conversion
 - **GPU (optional)** – for accelerated StarDist inference
 
+
 ---
+
 
 ## Installation
 
@@ -49,7 +57,6 @@ Predefined environment files are provided in the `env/` directory:
 | Linux | `env/bruce-env_linux.yml` |
 ```
 
-```md
 Open a terminal and run:
 
 ```bash
@@ -67,8 +74,11 @@ bruce
 
 # Or launch Bruce directly from napari
 napari --with napari-bruce
+```
+
 
 ---
+
 
 ## Configuration
 
@@ -85,8 +95,25 @@ bruce --edit-config
 
 # Reset config to defaults
 bruce --reset-config
+```
+
+
+---
+
+
+## GPU support & StarDist models 
+
+Bruce runs StarDist predictions on the GPU if visible to TensorFlow, and supports user-defined StarDist models.
+
+Useful commands:
+
+```bash
+# Check whether GPU(s) are visible to TensorFlow
+bruce --gpu-status
 
 # List available StarDist models
 bruce --list-models
 
+# Add a user-defined StarDist model (replace <MODEL_DIR> with the model directory)
+bruce --add-model <MODEL_DIR>
 ```
