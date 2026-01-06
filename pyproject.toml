@@ -19,7 +19,7 @@ classifiers = [
 
 dependencies = [
   "napari",
-  "numpy==1.23.5",
+  "numpy==1.26.4",
   "opencv-python-headless>=4.8",
   "ome-types",
   "pandas",
