@@ -5,6 +5,7 @@ channels:
 
 dependencies:
   - python=3.10
+  - numpy=1.26.4
   - openjdk
   - cudatoolkit=11.2
   - cudnn=8.1.0
