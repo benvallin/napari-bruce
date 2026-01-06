@@ -38,18 +38,22 @@ def list_stardist_models() -> dict:
   
   pretrained = {x:'pretrained' for x in pretrained}
   
-  user_defined = Path(os.path.join(importlib.resources.files('napari_bruce'),  
-                                   'stardist_models'))
+  user_models_dir = Path(os.path.join(importlib.resources.files('napari_bruce'),  
+                                      'stardist_models'))
     
-  if not (os.path.exists(user_defined) and os.path.isdir(user_defined)):
+  if not (os.path.exists(user_models_dir) and os.path.isdir(user_models_dir)):
     
     user_defined = {}
   
   else:
     
-    user_defined = [x.stem for x in user_defined.iterdir() if x.is_dir()]
+    tmp = [i for i in user_models_dir.iterdir() if i.is_dir()]
     
-    user_defined = {x:'user-defined' for x in user_defined}
+    tmp = {i.stem: [j.name for j in i.iterdir()] for i in tmp}
+    
+    tmp = [k for k,v in tmp.items() if all(i in v for i in ['config.json', 'thresholds.json', 'logs', 'weights_best.h5', 'weights_last.h5'])]
+    
+    user_defined = {x:'user-defined' for x in tmp}
   
   output = {**pretrained, **user_defined}
   

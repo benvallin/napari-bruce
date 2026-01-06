@@ -1,13 +1,10 @@
 name: bruce-env
+
 channels:
   - conda-forge
-  - defaults
 
 dependencies:
   - python=3.10
-  - numpy=1.26.4
-  - napari
-  - pyqt
   - openjdk
   - cudatoolkit=11.2
   - cudnn=8.1.0

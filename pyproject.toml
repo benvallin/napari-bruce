@@ -10,7 +10,6 @@ authors = [{ name = "Benjamin Vallin", email = "ben.vallin@gmail.com" }]
 classifiers = [
   "Framework :: napari",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Operating System :: OS Independent",
   "License :: OSI Approved :: MIT License",
@@ -19,13 +18,14 @@ classifiers = [
 
 dependencies = [
   "napari",
+  "PyQt5",
+  "qtpy",
   "numpy==1.26.4",
-  "opencv-python-headless>=4.8",
+  "opencv-python-headless",
   "ome-types",
+  "tifffile",
   "pandas",
   "matplotlib",
-  "tifffile",
-  "qtpy",
   "csbdeep",
   "stardist",
 ]

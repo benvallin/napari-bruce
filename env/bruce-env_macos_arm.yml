@@ -1,15 +1,13 @@
 name: bruce-env
+
 channels:
   - conda-forge
 
 dependencies:
   - python=3.10
-  - numpy=1.26.4
-  - napari
-  - pyqt        
   - openjdk
   - pip
   - pip:
-      - tensorflow
+      - tensorflow-macos
       - tensorflow-metal
       - stardist
