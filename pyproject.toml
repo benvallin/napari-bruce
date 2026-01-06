@@ -1,6 +1,6 @@
 [project]
 name = "napari-bruce"
-version = "0.0.3"
+version = "0.0.4"
 description = "A napari plugin for drawing PALM RoboSoftware elements using StarDist segmentation"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -17,15 +17,17 @@ classifiers = [
   "Intended Audience :: Science/Research",
 ]
 
-# Logical Python dependencies ONLY
 dependencies = [
   "napari",
-  "qtpy",
+  "numpy==1.23.5",
+  "opencv-python-headless>=4.8",
   "ome-types",
   "pandas",
   "matplotlib",
   "tifffile",
+  "qtpy",
   "csbdeep",
+  "stardist",
 ]
 
 [build-system]
@@ -50,3 +52,5 @@ napari-bruce = "napari_bruce:napari.yaml"
 
 [project.scripts]
 bruce = "napari_bruce.cli:cli_main"
+
+

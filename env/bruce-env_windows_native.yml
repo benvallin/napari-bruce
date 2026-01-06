@@ -5,14 +5,9 @@ channels:
 
 dependencies:
   - python=3.10
-  - numpy=1.26.4
+  - numpy=1.23.5
   - napari
   - pyqt
-  - opencv
-  - ome-types
-  - pandas
-  - matplotlib
-  - tifffile
   - openjdk
   - cudatoolkit=11.2
   - cudnn=8.1.0
