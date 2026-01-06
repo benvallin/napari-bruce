@@ -8,6 +8,11 @@ dependencies:
   - numpy=1.26.4
   - napari
   - pyqt
+  - opencv
+  - ome-types
+  - pandas
+  - matplotlib
+  - tifffile
   - openjdk
   - cudatoolkit=11.2
   - cudnn=8.1.0

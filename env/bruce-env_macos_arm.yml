@@ -4,9 +4,14 @@ channels:
 
 dependencies:
   - python=3.10
-  - numpy=1.26.4
+  - numpy<1.24        
   - napari
-  - pyqt        
+  - pyqt
+  - opencv
+  - ome-types
+  - pandas
+  - matplotlib
+  - tifffile
   - openjdk
   - pip
   - pip:
