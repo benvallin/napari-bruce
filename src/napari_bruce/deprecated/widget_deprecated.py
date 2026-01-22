@@ -14,9 +14,8 @@ import json
 import importlib.resources
 from matplotlib.colors import to_rgba
 from pathlib import Path
-from qtpy.QtWidgets import QPushButton, QWidget, QLabel, QVBoxLayout, QFileDialog, QDoubleSpinBox, QHBoxLayout, QApplication, QSizePolicy, QStyle
-from qtpy.QtCore import Signal, QObject, QThread, QTimer, Qt
-from enum import Enum
+from qtpy.QtWidgets import QPushButton, QWidget, QLabel, QVBoxLayout, QFileDialog, QDoubleSpinBox, QHBoxLayout, QApplication, QSizePolicy
+from qtpy.QtCore import Signal, QObject, QThread, QTimer
 from csbdeep.utils import normalize
 from contextlib import redirect_stdout, redirect_stderr
 import napari_bruce.configuration as configuration
@@ -24,7 +23,6 @@ import napari_bruce.workflow as workflow
 
 # Check Java
 workflow.require_java()
-
 
 # Load configuration
 config = configuration.get_config()
@@ -116,18 +114,6 @@ class ParamValueBox(QWidget):
   def value(self) -> float:
     return self._spin.value()
 
-# %% MessageLevel() ----
-
-class MessageLevel(Enum):
-  NONE = None
-  INFO = QStyle.SP_MessageBoxInformation
-  BUSY = QStyle.SP_BrowserReload  
-  WORK = QStyle.SP_ComputerIcon
-  CHECK = QStyle.SP_ArrowRight
-  SAVE = QStyle.SP_DialogSaveButton
-  WARNING = QStyle.SP_MessageBoxWarning
-  ERROR = QStyle.SP_MessageBoxCritical
-    
 # %% PluginManager() ----
 
 class PluginManager(QWidget):
@@ -165,37 +151,27 @@ class PluginManager(QWidget):
       
     for i in ['_predict_requested', 
               '_filter_size_requested',
-              '_filter_overlap_requested',
-              '_channel_mismatch']:
+              '_filter_overlap_requested']:
       
       setattr(self, i, False)  
-            
+    
+    for i in ['_warning', 
+              '_status']:
+      
+      setattr(self, i, '')  
+        
     self.btn_select = QPushButton('Select file')
     self.btn_select.clicked.connect(self.on_select_clicked)
     
-    # Create default layout    
-    self.msg_icon = QLabel()
-    self.msg_icon.setFixedSize(16, 16)
-    self.msg_icon.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-    self.msg_icon.setVisible(False)
+    self.lab_message = QLabel('')
+    self.lab_message.setWordWrap(True)
+    self.lab_message.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
 
-    self.msg_text = QLabel('')
-    self.msg_text.setWordWrap(True)
-    self.msg_text.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-    self.msg_text.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-    
-    self.msg_container = QWidget()
-    self.msg_layout = QHBoxLayout(self.msg_container)
-    self.msg_layout.setContentsMargins(0, 0, 0, 0)
-    self.msg_layout.setSpacing(6)
-    self.msg_layout.addWidget(self.msg_icon, alignment=Qt.AlignTop)
-    self.msg_layout.addWidget(self.msg_text, stretch=1)
-    
+    # Create default layout    
     self.header_layout = QVBoxLayout()  
     self.header_layout.addWidget(self.btn_select)
-    self.header_layout.addSpacing(30)    
-    self.header_layout.addWidget(self.msg_container)
-    
+    self.header_layout.addSpacing(30)
+    self.header_layout.addWidget(self.lab_message)
     self.layout = QVBoxLayout()
     self.layout.addLayout(self.header_layout)
     self.layout.addStretch(1)  
@@ -204,30 +180,17 @@ class PluginManager(QWidget):
     self.setMaximumWidth(1000)   
     
   # Define methods    
-  def set_message(self, text: str, level: MessageLevel = MessageLevel.NONE):
+  def update_message(self):
     
-    if self._channel_mismatch:
+    self.lab_message.setText(self._warning + self._status)
+    self.lab_message.setWordWrap(True)
       
-      text = f'{text}\n\n\nWARNING: channel name mismatch between image and config.'
-
-    self.msg_text.setText(text)
-
-    if level.value is None:
-      
-      self.msg_icon.setVisible(False)
-      
-    else:
-      
-      icon = QApplication.style().standardIcon(level.value)
-      self.msg_icon.setPixmap(icon.pixmap(16, 16))
-      self.msg_icon.setVisible(True)
-        
   def on_clear_clicked(self, *args):
     
     # Send Clear message
-    self._channel_mismatch = False
-    self.set_message('Resetting napari-bruce...', 
-                     MessageLevel.BUSY)
+    self._warning = ''
+    self._status = '⏳ Resetting napari-bruce...'
+    self.update_message()
         
     # Reset attributes to default values
     self.config = copy.deepcopy(config)
@@ -267,6 +230,11 @@ class PluginManager(QWidget):
               '_filter_overlap_requested']:
       
       setattr(self, i, False)  
+      
+    for i in ['_warning', 
+              '_status']:
+      
+      setattr(self, i, '')  
     
     # Delay viewer reset
     QApplication.processEvents()
@@ -284,8 +252,7 @@ class PluginManager(QWidget):
     self.layout.insertWidget(0, self.btn_select)
     
     # Send empty message
-    self.set_message('', 
-                     MessageLevel.NONE)
+    self.update_message()
        
   def on_select_clicked(self):
     
@@ -298,8 +265,8 @@ class PluginManager(QWidget):
     # Abort if user cancelled selection
     if self.path == '':
       
-      self.set_message('.zvi file selection cancelled', 
-                       MessageLevel.WARNING)
+      self._status = f'.zvi file selection cancelled'
+      self.update_message()
       
       return
     
@@ -326,8 +293,8 @@ class PluginManager(QWidget):
       
       self.layout.insertWidget(i, j)
     
-    self.set_message('.zvi file selected', 
-                     MessageLevel.INFO)
+    self._status = f'👍 .zvi file selected'
+    self.update_message()
   
   def on_load_clicked(self):
     
@@ -337,8 +304,8 @@ class PluginManager(QWidget):
     self.btn_load.deleteLater()    
     self.btn_load = None
     
-    self.set_message('Loading images...', 
-                     MessageLevel.WORK)
+    self._status = f'💪 Loading images...'
+    self.update_message()
     
     # Trigger load worker thread 
     self.start_load_thread()
@@ -363,7 +330,7 @@ class PluginManager(QWidget):
     self._load_worker_thread.started.connect(self._load_worker.run)
 
     # Ensure UI messages and result handling
-    self._load_worker.sig_message.connect(self.set_message)
+    self._load_worker.sig_message.connect(self.update_message)
     self._load_worker.sig_output.connect(self.on_load_finished)
 
     # Make thread stop when worker emits sig_output
@@ -395,10 +362,11 @@ class PluginManager(QWidget):
     
     if not (ch0_nm_ok and ch1_nm_ok):
             
-      self._channel_mismatch = True
-              
-    self.set_message('Updating viewer...', 
-                     MessageLevel.BUSY)
+      self._warning = f'Channel name mismatch between image and config\n\n'
+          
+    self._status = '⏳ Updating viewer...'
+    
+    self.update_message()
     
     # Update data / metadata / ch_names attributes with load worker output
     self.data = data
@@ -489,8 +457,8 @@ class PluginManager(QWidget):
         
         i.setEnabled(True)
       
-      self.set_message("Check images in viewer\n\nAdjust min size thresholds (optional)\n\nPress 'Predict cells' when ready", 
-                       MessageLevel.CHECK)
+      self._status = f"🔎 Check images in viewer\n\n🔹 Adjust min size thresholds (optional)\n\n👉 Press 'Predict cells' when ready"
+      self.update_message()
           
     # Alternatively, proceed with prediction if 'Predict cells' button was clicked
     else:
@@ -526,9 +494,8 @@ class PluginManager(QWidget):
       # Record that prediction has been requested
       self._predict_requested = True
       
-      self.set_message('Loading images...', 
-                       MessageLevel.WORK)
-
+      self._status = f'💪 Loading images...'
+      self.update_message()
       
       # Trigger load worker thread 
       self.start_load_thread()
@@ -540,8 +507,8 @@ class PluginManager(QWidget):
   
   def on_img_loaded_and_predict_clicked(self):
     
-    self.set_message('Predicting objects...', 
-                     MessageLevel.WORK)
+    self._status = f'💪 Predicting objects...'
+    self.update_message()
     
     # Trigger predict worker thread 
     self.start_predict_thread()
@@ -564,7 +531,7 @@ class PluginManager(QWidget):
     self._predict_worker_thread.started.connect(self._predict_worker.run)
 
     # Ensure UI messages and result handling
-    self._predict_worker.sig_message.connect(self.set_message)
+    self._predict_worker.sig_message.connect(self.update_message)
     self._predict_worker.sig_output.connect(self.on_predict_finished)
 
     # Make thread stop when worker emits sig_output
@@ -593,8 +560,8 @@ class PluginManager(QWidget):
     # Update data attribute with predict worker output
     self.data = data
     
-    self.set_message('Filtering out small objects...', 
-                     MessageLevel.WORK)
+    self._status = f'💪 Filtering out small objects...'
+    self.update_message()
     
     # Trigger filter size worker thread 
     self.start_filter_size_thread()    
@@ -604,8 +571,8 @@ class PluginManager(QWidget):
     # Record that size filtering has been requested
     self._filter_size_requested = True
     
-    self.set_message('Re-filtering out small objects...', 
-                     MessageLevel.WORK)
+    self._status = f'💪 Re-filtering out small objects...'
+    self.update_message()
     
     # Trigger filter size worker thread 
     self.start_filter_size_thread()
@@ -633,7 +600,7 @@ class PluginManager(QWidget):
     self._filter_size_worker_thread.started.connect(self._filter_size_worker.run)
 
     # Ensure UI messages and result handling
-    self._filter_size_worker.sig_message.connect(self.set_message)
+    self._filter_size_worker.sig_message.connect(self.update_message)
     self._filter_size_worker.sig_output.connect(self.on_filter_size_finished)
 
     # Make thread stop when worker emits sig_output
@@ -662,9 +629,9 @@ class PluginManager(QWidget):
     # Update data attribute with filter size worker output
     self.data = data
     
-    # Delay viewer update    
-    self.set_message('Updating viewer...', 
-                     MessageLevel.BUSY)
+    # Delay viewer update
+    self._status = f'⏳ Updating viewer...'
+    self.update_message()
     
     QApplication.processEvents()
     
@@ -710,8 +677,8 @@ class PluginManager(QWidget):
       
       i.setEnabled(True)
     
-    self.set_message("Check images in viewer\n\nEdit cell contours (optional)\n\nPress 'Apply edits' when finished",
-                     MessageLevel.CHECK)
+    self._status = f"🔎 Check images in viewer\n\n🔹 Edit cell contours (optional)\n\n👉 Press 'Apply edits' when finished"
+    self.update_message()
         
   def on_apply_edits_clicked(self):
     
@@ -727,8 +694,8 @@ class PluginManager(QWidget):
       j.deleteLater()    
       setattr(self, i, None)
     
-    self.set_message('Applying edits...', 
-                     MessageLevel.WORK)
+    self._status = f'💪 Applying edits...'   
+    self.update_message()
     
     # Trigger apply edits worker thread 
     self.start_apply_edits_thread()
@@ -747,7 +714,7 @@ class PluginManager(QWidget):
     self._apply_edits_worker_thread.started.connect(self._apply_edits_worker.run)
 
     # Ensure UI messages and result handling
-    self._apply_edits_worker.sig_message.connect(self.set_message)
+    self._apply_edits_worker.sig_message.connect(self.update_message)
     self._apply_edits_worker.sig_output.connect(self.on_apply_edits_finished)
 
     # Make thread stop when worker emits sig_output
@@ -777,8 +744,8 @@ class PluginManager(QWidget):
     self.data = data
     
     # Delay viewer update
-    self.set_message('Updating viewer...', 
-                     MessageLevel.BUSY)
+    self._status = f'⏳ Updating viewer...'
+    self.update_message()
     
     QApplication.processEvents()
     
@@ -828,8 +795,8 @@ class PluginManager(QWidget):
     # Re-enable 'Clear' button
     self.btn_clear.setEnabled(True)
     
-    self.set_message("Adjust overlap thresholds (optional)\n\nPress 'Find overlaps' when ready", 
-                     MessageLevel.CHECK)
+    self._status = f"🔹 Adjust overlap thresholds (optional)\n\n👉 Press 'Find overlaps' when ready"
+    self.update_message()
        
   def on_overlap_clicked(self):
     
@@ -839,8 +806,8 @@ class PluginManager(QWidget):
     self.btn_overlap.deleteLater()    
     self.btn_overlap = None
     
-    self.set_message('Computing overlaps...', 
-                     MessageLevel.WORK)
+    self._status = f'💪 Computing overlaps...'
+    self.update_message()
     
     # Trigger overlap worker thread   
     self.start_overlap_thread()
@@ -850,8 +817,8 @@ class PluginManager(QWidget):
     # Record that % overlap filtering has been requested
     self._filter_overlap_requested = True
     
-    self.set_message('Re-computing overlaps...', 
-                     MessageLevel.WORK)
+    self._status = f'💪 Re-computing overlaps...'
+    self.update_message()
     
     # Trigger overlap worker thread   
     self.start_overlap_thread()
@@ -879,7 +846,7 @@ class PluginManager(QWidget):
     self._overlap_worker_thread.started.connect(self._overlap_worker.run)
 
     # Ensure UI messages and result handling
-    self._overlap_worker.sig_message.connect(self.set_message)
+    self._overlap_worker.sig_message.connect(self.update_message)
     self._overlap_worker.sig_output.connect(self.on_overlap_finished)
 
     # Make thread stop when worker emits sig_output
@@ -909,8 +876,8 @@ class PluginManager(QWidget):
     self.data = data
     
     # Delay viewer update
-    self.set_message('Updating viewer...', 
-                     MessageLevel.BUSY)
+    self._status = f'⏳ Updating viewer...'
+    self.update_message()
     
     QApplication.processEvents()
     
@@ -951,30 +918,31 @@ class PluginManager(QWidget):
       i.setEnabled(True)
     
     # Message cell status summary 
-    summary = f'''Count summary
+    self._status = f'''
+    
+    📚 Count summary
     
     
-    ~> {self.ch_names[0]} 
+    🔹 {self.ch_names[0]}
     
-        - total: {self.data[self.ch_names[0]]['summary']['total']}
-        - {self.ch_names[1]}-neg: {self.data[self.ch_names[0]]['summary']['neg']}
-        - {self.ch_names[1]}-pos: {self.data[self.ch_names[0]]['summary']['pos']}
-        - {self.ch_names[1]}-ambiguous: {self.data[self.ch_names[0]]['summary']['amb']}
-    
-    
-    ~> {self.ch_names[1]} 
-    
-        - total: {self.data[self.ch_names[1]]['summary']['total']}
-        - {self.ch_names[0]}-neg: {self.data[self.ch_names[1]]['summary']['neg']}
-        - {self.ch_names[0]}-pos: {self.data[self.ch_names[1]]['summary']['pos']}
-        - {self.ch_names[0]}-ambiguous: {self.data[self.ch_names[1]]['summary']['amb']}
+      🔸 total: {self.data[self.ch_names[0]]['summary']['total']}
+      🔸 {self.ch_names[1]}-neg: {self.data[self.ch_names[0]]['summary']['neg']}
+      🔸 {self.ch_names[1]}-pos: {self.data[self.ch_names[0]]['summary']['pos']}
+      🔸 {self.ch_names[1]}-ambiguous: {self.data[self.ch_names[0]]['summary']['amb']}
     
     
-    See merge image in viewer
+    🔹 {self.ch_names[1]} 
+    
+      🔸 total: {self.data[self.ch_names[1]]['summary']['total']}
+      🔸 {self.ch_names[0]}-neg: {self.data[self.ch_names[1]]['summary']['neg']}
+      🔸 {self.ch_names[0]}-pos: {self.data[self.ch_names[1]]['summary']['pos']}
+      🔸 {self.ch_names[0]}-ambiguous: {self.data[self.ch_names[1]]['summary']['amb']}
+    
+    
+    🔎 See merge image in viewer
     '''
     
-    self.set_message(summary, 
-                     MessageLevel.INFO)
+    self.update_message()
   
   def on_save_clicked(self):
     
@@ -997,8 +965,8 @@ class PluginManager(QWidget):
     with open(os.path.join(out_dir_path, 'config.json'), 'w') as f:
       json.dump(self.config, f, indent=2)
     
-    self.set_message(f"Results saved at:\n{self.config['out_dir_path']}\n\nIn subfolder:\n{self.metadata['img_nm']}",
-                     MessageLevel.SAVE)
+    self._status = f"💾 Results saved at:\n{self.config['out_dir_path']}\n\nIn subfolder:\n{self.metadata['img_nm']}"
+    self.update_message()
 
   def on_min_n_pix_ch0_changed(self, value):
 

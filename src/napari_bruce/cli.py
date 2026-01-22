@@ -6,6 +6,7 @@ import sys
 import argparse
 import subprocess
 import shutil
+from contextlib import redirect_stdout, redirect_stderr
 import napari_bruce.configuration as configuration
 
 # %% launch_napari_with_plugin() ----
@@ -119,9 +120,12 @@ def cli_main(argv: list[str] | None = None) -> None:
       return
     
     if args.gpu_status:
-    
-      from tensorflow.config import list_physical_devices
-      gpus = list_physical_devices('GPU')
+      
+      with open(os.devnull, 'w') as f, redirect_stdout(f), redirect_stderr(f):
+        
+        from tensorflow.config import list_physical_devices
+        gpus = list_physical_devices('GPU')
+      
       if gpus: 
         print(f'🟢 StarDist runs on GPU.\nGPU(s) visible to TensorFlow: {gpus}')
       else:
