@@ -1077,3 +1077,26 @@ Elements :\n
   output = header + output + '\n\n\n'
   
   return output
+
+# %% choose_stardist_n_tiles() ----
+
+def choose_stardist_n_tiles(img: np.ndarray, max_tile_px: int = 1024) -> tuple[int, int]:
+  
+  """
+  Choose StarDist n_tiles automatically based on image size.
+  
+  Args:
+    img (numpy.ndarray): 2D image (H, W).
+    max_tile_px (int): target tile size in pixels.
+
+  Returns:
+    tuple: (ny, nx) tiling tuple for StarDist.
+    
+  """
+  
+  h, w = img.shape[:2]
+
+  ny = max(1, int(np.ceil(h / max_tile_px)))
+  nx = max(1, int(np.ceil(w / max_tile_px)))
+  
+  return ny, nx

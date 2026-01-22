@@ -7,6 +7,7 @@ import importlib.resources
 import json
 import shutil
 from pathlib import Path
+from importlib.metadata import version, PackageNotFoundError
 
 # %% get_config_file_path() ----
 
@@ -289,3 +290,19 @@ def add_stardist_model(src: str) -> None:
                   dst=out_dir_path, 
                   copy_function=shutil.copy2, 
                   dirs_exist_ok=True)
+
+# %% get_version() ----
+
+def get_version() -> str:
+  
+  """Get package version.
+  
+  Returns:
+    str: package version.
+  
+  """
+  
+  try:
+    return version('napari-bruce')
+  except PackageNotFoundError:
+    return 'unknown'

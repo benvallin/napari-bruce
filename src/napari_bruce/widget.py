@@ -6,6 +6,7 @@ print(f'\nStarting napari-bruce 🦇...\n')
 print(f'\n\t⏳ Loading dependencies\n')
 
 import os
+import sys
 import copy
 import numpy as np
 import cv2
@@ -33,7 +34,23 @@ config['channels'] = {int(k):v for k, v in config['channels'].items()}
 print(f'\t⏳ Loading StarDist models\n')
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2' 
+  
+windows = sys.platform.startswith('win')
 
+if windows:
+  
+  from tensorflow.config import list_physical_devices
+  from tensorflow.config.experimental import set_memory_growth
+    
+  gpus = list_physical_devices('GPU')
+    
+  if gpus:  
+    for gpu in gpus:
+      try:
+        set_memory_growth(gpu, True)
+      except Exception:
+        pass
+                
 with open(os.devnull, 'w') as f, redirect_stdout(f), redirect_stderr(f):
   
   from stardist.models import StarDist2D
@@ -164,6 +181,8 @@ class PluginManager(QWidget):
     self.lab_message.setWordWrap(True)
     
   def on_clear_clicked(self, msg: str = '', *args):
+    
+    print("DEBUG: on_clear_clicked called", msg)
     
     msg = '' if msg in (None, False, True) else str(msg)
     
@@ -1015,9 +1034,14 @@ class PredictWorker(QObject):
     for k, v in self.ch_names.items():
       
       # Run StarDist
-      self.data[v]['msk'] = models[k].predict_instances(img=normalize(self.data[v]['norm_img']),
+      img = normalize(self.data[v]['norm_img'])
+                      
+      n_tiles = workflow.choose_stardist_n_tiles(img)
+      
+      self.data[v]['msk'] = models[k].predict_instances(img=img,
                                                         prob_thresh=None,
-                                                        nms_thresh=None)[0]
+                                                        nms_thresh=None,
+                                                        n_tiles=n_tiles)[0]
       
       # Compute submask area
       self.data[v]['msk_area'] = workflow.count_submsks_pixels(msk=self.data[v]['msk'])

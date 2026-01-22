@@ -81,6 +81,13 @@ def cli_main(argv: list[str] | None = None) -> None:
       metavar='MODEL_DIR',
       help='add the StarDist model located at MODEL_DIR to napari-bruce',
       )
+    
+    parser.add_argument(
+      '-v', '--version',
+      action="version",
+      version=f'napari-bruce {configuration.get_version()}',
+      help='show the napari-bruce version and exit',
+      )
   
     args = parser.parse_args(argv)
   
