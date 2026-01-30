@@ -6,35 +6,154 @@ import sys
 import argparse
 import subprocess
 import shutil
+import time
+import threading
+import itertools
+import tempfile
+from pathlib import Path
 from contextlib import redirect_stdout, redirect_stderr
 import napari_bruce.configuration as configuration
 
 # %% launch_napari_with_plugin() ----
 
-def launch_napari_with_plugin() -> None:
+def _is_unicode_supported():
   
-  """Start napari and load the napari-bruce plugin using the napari CLI."""
+  enc = getattr(sys.stdout, 'encoding', None) or ''
   
-  cmd = ["napari", "--with", "napari-bruce"]
+  return 'utf' in enc.lower()
+
+def spin_until(condition, message='Waiting…', delay=0.08, timeout=None):
+  
+  if not sys.stdout.isatty():
+    
+    start = time.time()
+    
+    while True:
+      
+      if condition():
+        
+        return True
+      
+      if timeout is not None and (time.time() - start) > timeout:
+        
+        return False
+      
+      time.sleep(0.05)
+
+  stop_event = threading.Event()
+  
+  frames = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏' if _is_unicode_supported() else '|/-\\'
+  
+  line_len = len(message) + 2
+
+  def _spin():
+    
+    for f in itertools.cycle(frames):
+      
+      if stop_event.is_set():
+        
+        break
+      
+      sys.stdout.write(f"\r{f} {message}")
+      
+      sys.stdout.flush()
+      
+      time.sleep(delay)
+
+  t = threading.Thread(target=_spin, daemon=True)
+  
+  t.start()
+
+  start = time.time()
   
   try:
     
-    subprocess.run(cmd, check=True)
+    while True:
       
-  except FileNotFoundError as e:
-    
-    print(f"{type(e).__name__}: 'napari' command not found.\nMake sure napari is installed in this environment and on your PATH.", 
-          file=sys.stderr)
-    
-    raise SystemExit(1)
-  
-  except subprocess.CalledProcessError as e:
+      if condition():
         
-    print(f'{type(e).__name__}: napari exited with error code {e.returncode}.', 
-          file=sys.stderr)
+        return True
+      
+      if timeout is not None and (time.time() - start) > timeout:
+        
+        return False
+      
+      time.sleep(0.05)
+  
+  finally:
+    
+    stop_event.set()
+    
+    t.join()
+    
+    sys.stdout.write('\r' + ' ' * line_len + '\r')
+    
+    sys.stdout.flush()
+
+def launch_napari_with_plugin(timeout=60.0):
+  
+  ready_file = Path(tempfile.gettempdir()) / 'napari_bruce_ready'
+  
+  try:
+    
+    if ready_file.exists():
+      
+      ready_file.unlink()
+  
+  except Exception:
+    
+    pass
+
+  env = os.environ.copy()
+  
+  env['NAPARI_BRUCE_READY_FILE'] = str(ready_file)
+
+  print(r"""
+        '            '
+     /*/    '   '    \*\
+   /**/     |\_/|     \**\
+  *****-----*****-----*****
+ |********* BRUCE *********|
+  ****/-\***********/-\****
+   |*|   \*********/   |*|
+    \*\    \*****/    /*/
+      \\     \*/     //
+        '     '     '
+        """)
+
+  cmd = ['napari', '--with', 'napari-bruce']
+
+  try:
+    
+    proc = subprocess.Popen(cmd, env=env)
+    
+    def condition():
+      
+      if ready_file.exists():
+        
+        return True
+      
+      return proc.poll() is not None
+
+    ok = spin_until(condition, message='Starting napari-bruce...', timeout=timeout)
+    
+    if ready_file.exists():
+      
+      print('✔ Program is ready\n')
+    
+    elif proc.poll() is not None:
+      
+      print(f'napari process exited with code {proc.returncode}\n')
+    
+    else:
+      
+      print('Timeout waiting for napari to signal ready')
+
+  except FileNotFoundError:
+    
+    print("FileNotFoundError: 'napari' not found. Ensure it is installed and on PATH.\n", file=sys.stderr)
     
     raise SystemExit(1)
-    
 
 # %% cli_main() ----
 

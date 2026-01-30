@@ -1,6 +1,6 @@
 [project]
 name = "napari-bruce"
-version = "0.0.7"
+version = "0.0.8"
 description = "A napari plugin for drawing PALM RoboSoftware elements using StarDist segmentation"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -52,5 +52,4 @@ napari-bruce = "napari_bruce:napari.yaml"
 
 [project.scripts]
 bruce = "napari_bruce.cli:cli_main"
-
 

@@ -1,12 +1,8 @@
 # %% Set up ----
 
-print(f'\nStarting napari-bruce 🦇...\n')
-    
-# Import required libraries
-print(f'\n\t⏳ Loading dependencies\n')
-
-import os
+# Load dependencies
 import sys
+import os
 import copy
 import numpy as np
 import cv2
@@ -30,10 +26,8 @@ config = configuration.get_config()
 
 # Convert config['channels'] keys to int if read from json file 
 config['channels'] = {int(k):v for k, v in config['channels'].items()}
-              
-# Import StarDist and define models 
-print(f'\t⏳ Loading StarDist models\n')
 
+# Import StarDist and define models 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2' 
   
 windows = sys.platform.startswith('win')
@@ -81,9 +75,14 @@ with open(os.devnull, 'w') as f, redirect_stdout(f), redirect_stderr(f):
       models[i] = StarDist2D(None, 
                              name=model_nm, 
                              basedir=stardist_models_dir_path)
-  
-print(f'\n*** 🟢 Program is ready ***\n')
 
+# Signal readiness
+ready_path = os.environ.get('NAPARI_BRUCE_READY_FILE')
+
+if ready_path:
+  
+  Path(ready_path).touch(exist_ok=True)
+        
 # %% ParamValueBox() ----
 
 class ParamValueBox(QWidget):
@@ -216,7 +215,17 @@ class PluginManager(QWidget):
     self.setLayout(self.layout) 
     self.setMinimumWidth(300)
     self.setMaximumWidth(1000)   
-    
+  
+  # def showEvent(self, event):
+  #       # Called when the widget becomes visible on screen
+  #       super().showEvent(event)
+  #       ready_path = os.environ.get("NAPARI_BRUCE_READY_FILE")
+  #       if ready_path:
+  #           try:
+  #               Path(ready_path).touch()
+  #           except Exception:
+  #               pass
+                
   # Define methods    
   def set_message(self, text: str, level: MessageLevel = MessageLevel.NONE):
     
