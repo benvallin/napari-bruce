@@ -108,7 +108,8 @@ def check_config_integrity(config: dict) -> None:
                  'out_dir_path': str, 
                  'channels': dict, 
                  'min_pct_ovl_ch0_by_ch1': (int, float),
-                 'min_pct_ovl_ch1_by_ch0': (int, float)}
+                 'min_pct_ovl_ch1_by_ch0': (int, float),
+                 'elements': dict}
   
   exp_ch_kv = {'0': dict,
                '1': dict}
@@ -117,8 +118,19 @@ def check_config_integrity(config: dict) -> None:
                   'low_pct': (int, float), 
                   'high_pct': (int, float), 
                   'stardist_model': str, 
-                  'min_n_pix': (int, float), 
+                  'min_area_um2': (int, float), 
                   'color': str}
+  
+  exp_elem_kv = {'ch0-pos/ch1-neg': dict,
+                 'ch0-pos/ch1-pos': dict,
+                 'ch0-pos/ch1-amb': dict,
+                 'ch1-pos/ch0-neg': dict,
+                 'ch1-pos/ch0-amb': dict}
+  
+  exp_subelem_kv = {'color': str,
+                    'collect': bool,
+                    'laser_function': str,
+                    'tube_id': int}
   
   check_dict_kv(exp_kv=exp_main_kv, 
                 in_dict=config, 
@@ -152,6 +164,31 @@ def check_config_integrity(config: dict) -> None:
         
         raise ConfigError(f"config['channels']['{i}']['{j}'] must be between 0 and 100.")
   
+  check_dict_kv(exp_kv=exp_elem_kv, 
+                in_dict=config['elements'], 
+                dict_nm='config elements')
+  
+  available_laser_functions = ['',
+                               'Cut', 'JointCut', 'CloseCut', 
+                               'LPC', 'LineAutoLPC', 'AutoLPC', 
+                               'CloseCut + AutoLPC', 'RoboLPC', 'CenterRoboLPC']
+  
+  available_tube_ids = list(range(1,9))
+  
+  for i in config['elements'].keys():
+    
+    check_dict_kv(exp_kv=exp_subelem_kv, 
+                  in_dict=config['elements'][i], 
+                  dict_nm=f'config elements {i}')
+    
+    if config['elements'][i]['laser_function'] not in available_laser_functions:
+      
+      raise ConfigError(f"config['elements']['{i}']['laser_function'] must be one of {', '.join(available_laser_functions)}.")
+    
+    if config['elements'][i]['tube_id'] not in available_tube_ids:
+      
+      raise ConfigError(f"config['elements']['{i}']['tube_id'] must be one of {', '.join(available_tube_ids)}.")
+    
   return
 
 # %% make_default_config() ----
@@ -180,22 +217,43 @@ def make_default_config() -> dict:
                                'low_pct': 0.05,
                                'high_pct': 99.95,
                                'stardist_model': 'stardist_th',
-                               'min_n_pix': 800,
+                               'min_area_um2': 100,
                                'color': 'purple'},
                          1: {'name': 'pSyn', 
                                'low_pct': 0.05,
                                'high_pct': 99.95,
                                'stardist_model': 'stardist_psyn',
-                               'min_n_pix': 800,
+                               'min_area_um2': 50,
                                'color': 'cyan'}},
             'min_pct_ovl_ch0_by_ch1': 20,
-            'min_pct_ovl_ch1_by_ch0': 80}
+            'min_pct_ovl_ch1_by_ch0': 80,
+            'elements': {'ch0-pos/ch1-neg': {'color': 'purple',
+                                             'collect': True,
+                                             'laser_function': 'RoboLPC',
+                                             'tube_id': 1},
+                         'ch0-pos/ch1-pos': {'color': 'green',
+                                             'collect': True,
+                                             'laser_function': 'RoboLPC',
+                                             'tube_id': 2},
+                         'ch0-pos/ch1-amb': {'color': 'yellow',
+                                             'collect': False,
+                                             'laser_function': '',
+                                             'tube_id': 3},
+                         'ch1-pos/ch0-neg': {'color': 'cyan',
+                                             'collect': False,
+                                             'laser_function': '',
+                                             'tube_id': 4},
+                         'ch1-pos/ch0-amb': {'color': 'pink',
+                                             'collect': False,
+                                             'laser_function': '',
+                                             'tube_id': 5}}}
   
   with open(path, 'w') as f:
     
     json.dump(output, f, indent=2)
   
   return output
+
 # %% get_config() ----
 
 def get_config() -> dict:
@@ -303,6 +361,9 @@ def get_version() -> str:
   """
   
   try:
+    
     return version('napari-bruce')
+  
   except PackageNotFoundError:
+  
     return 'unknown'

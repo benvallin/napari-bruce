@@ -25,7 +25,6 @@ import napari_bruce.workflow as workflow
 # Check Java
 workflow.require_java()
 
-
 # Load configuration
 config = configuration.get_config()
 
@@ -47,10 +46,15 @@ if windows:
   gpus = list_physical_devices('GPU')
     
   if gpus:  
+    
     for gpu in gpus:
+    
       try:
+    
         set_memory_growth(gpu, True)
+    
       except Exception:
+    
         pass
                 
 with open(os.devnull, 'w') as f, redirect_stdout(f), redirect_stderr(f):
@@ -88,9 +92,9 @@ class ParamValueBox(QWidget):
   
   def __init__(self, 
                label, 
-               default,
-               min_val, 
-               max_val, 
+               default=0,
+               min_val=0, 
+               max_val=0, 
                decimals=0, 
                parent=None):
     
@@ -152,13 +156,23 @@ class PluginManager(QWidget):
               'btn_load',
               'btn_predict',
               'btn_filter_size',
-              'box_min_n_pix_ch0',
-              'box_min_n_pix_ch1',
+              'box_min_area_ch0',
+              'box_min_area_ch1',
               'btn_apply_edits',
               'btn_overlap',
               'btn_filter_overlap',
               'box_min_pct_ovl_ch0_by_ch1',
               'box_min_pct_ovl_ch1_by_ch0',
+              'box_n_ch0pos_ch1neg',
+              'box_n_ch0pos_ch1pos',
+              'box_n_ch0pos_ch1amb',
+              'box_n_ch1pos_ch0neg',
+              'box_n_ch1pos_ch0amb',
+              'box_tube_ch0pos_ch1neg',
+              'box_tube_ch0pos_ch1pos',
+              'box_tube_ch0pos_ch1amb',
+              'box_tube_ch1pos_ch0neg',
+              'box_tube_ch1pos_ch0amb',
               'btn_save']:
       
       setattr(self, i, None)
@@ -211,7 +225,7 @@ class PluginManager(QWidget):
       text = f'{text}\n\n\nWARNING: channel name mismatch between image and config.'
 
     self.msg_text.setText(text)
-
+    
     if level.value is None:
       
       self.msg_icon.setVisible(False)
@@ -221,11 +235,12 @@ class PluginManager(QWidget):
       icon = QApplication.style().standardIcon(level.value)
       self.msg_icon.setPixmap(icon.pixmap(16, 16))
       self.msg_icon.setVisible(True)
-        
+    
   def on_clear_clicked(self, *args):
     
     # Send Clear message
     self._channel_mismatch = False
+    
     self.set_message('Resetting napari-bruce...', 
                      MessageLevel.BUSY)
         
@@ -236,13 +251,23 @@ class PluginManager(QWidget):
               'btn_load',
               'btn_predict',
               'btn_filter_size',
-              'box_min_n_pix_ch0',
-              'box_min_n_pix_ch1',
+              'box_min_area_ch0',
+              'box_min_area_ch1',
               'btn_apply_edits',
               'btn_overlap',
               'btn_filter_overlap',
               'box_min_pct_ovl_ch0_by_ch1',
               'box_min_pct_ovl_ch1_by_ch0',
+              'box_n_ch0pos_ch1neg',
+              'box_n_ch0pos_ch1pos',
+              'box_n_ch0pos_ch1amb',
+              'box_n_ch1pos_ch0neg',
+              'box_n_ch1pos_ch0amb',
+              'box_tube_ch0pos_ch1neg',
+              'box_tube_ch0pos_ch1pos',
+              'box_tube_ch0pos_ch1amb',
+              'box_tube_ch1pos_ch0neg',
+              'box_tube_ch1pos_ch0amb',
               'btn_save']:
       
       j = getattr(self, i, None)
@@ -362,8 +387,7 @@ class PluginManager(QWidget):
     # Start worker when thread starts
     self._load_worker_thread.started.connect(self._load_worker.run)
 
-    # Ensure UI messages and result handling
-    self._load_worker.sig_message.connect(self.set_message)
+    # Ensure UI result handling
     self._load_worker.sig_output.connect(self.on_load_finished)
 
     # Make thread stop when worker emits sig_output
@@ -387,8 +411,24 @@ class PluginManager(QWidget):
     # Start worker thread
     self._load_worker_thread.start()
 
-  def on_load_finished(self, data, metadata):
-            
+  def on_load_finished(self, error, error_msg, data, metadata):
+    
+    # Stop if LoadWorker failed
+    if error is True:
+      
+      msg_intro = 'LoadWorker failed with the following error:\n\n'
+      
+      print(f'{msg_intro}{error_msg}')
+      
+      self._channel_mismatch = False
+      
+      self.set_message(f'{msg_intro}{error_msg}', 
+                       MessageLevel.ERROR)
+      
+      self.btn_clear.setEnabled(True)
+      
+      return
+        
     # Warn if channel names are not consistent between metadata and config 
     ch0_nm_ok = metadata['channels'][0]['name'] == self.config['channels'][0]['name']
     ch1_nm_ok = metadata['channels'][1]['name'] == self.config['channels'][1]['name']
@@ -462,21 +502,21 @@ class PluginManager(QWidget):
     self.viewer.layers.selection.active = self.viewer.layers[f'{self.ch_names[1]} normalized image']
     
     # Add 'min n pix' boxes to viewer
-    self.box_min_n_pix_ch0 = ParamValueBox(label=f'min n pix {self.ch_names[0]}:', 
-                                           default=self.config['channels'][0]['min_n_pix'],
-                                           min_val=0.0, 
-                                           max_val=10000.0)
-    self.box_min_n_pix_ch0.valueChanged.connect(self.on_min_n_pix_ch0_changed)
+    self.box_min_area_ch0 = ParamValueBox(label=f'min area (\u00B5m\u00B2) {self.ch_names[0]}', 
+                                          default=self.config['channels'][0]['min_area_um2'],
+                                          min_val=0.0, 
+                                          max_val=10000.0)
+    self.box_min_area_ch0.valueChanged.connect(self.on_min_area_ch0_changed)
       
-    self.box_min_n_pix_ch1 = ParamValueBox(label=f'min n pix {self.ch_names[1]}:', 
-                                           default=self.config['channels'][1]['min_n_pix'],
-                                           min_val=0.0, 
-                                           max_val=10000.0)
-    self.box_min_n_pix_ch1.valueChanged.connect(self.on_min_n_pix_ch1_changed)
+    self.box_min_area_ch1 = ParamValueBox(label=f'min area (\u00B5m\u00B2) {self.ch_names[1]}', 
+                                          default=self.config['channels'][1]['min_area_um2'],
+                                          min_val=0.0, 
+                                          max_val=10000.0)
+    self.box_min_area_ch1.valueChanged.connect(self.on_min_area_ch1_changed)
       
     for i, j in zip([0, 1], 
-                    [self.box_min_n_pix_ch0, 
-                     self.box_min_n_pix_ch1]):
+                    [self.box_min_area_ch0, 
+                     self.box_min_area_ch1]):
       
       self.layout.insertWidget(i, j)
     
@@ -496,8 +536,8 @@ class PluginManager(QWidget):
     else:
       
       # Disable 'min n pix' boxes
-      for i in [self.box_min_n_pix_ch0,  
-                self.box_min_n_pix_ch1]:
+      for i in [self.box_min_area_ch0,  
+                self.box_min_area_ch1]:
         
         i.setEnabled(False)
       
@@ -549,22 +589,21 @@ class PluginManager(QWidget):
   def start_predict_thread(self):
     
     # Disable 'min n pix' boxes and 'Clear' button
-    for i in [self.box_min_n_pix_ch0, 
-              self.box_min_n_pix_ch1,
+    for i in [self.box_min_area_ch0, 
+              self.box_min_area_ch1,
               self.btn_clear]:
       
       i.setEnabled(False)
             
     # Create thread and worker
     self._predict_worker_thread = QThread()
-    self._predict_worker = PredictWorker(self.data, self.ch_names)
+    self._predict_worker = PredictWorker(self.data, self.metadata, self.ch_names)
     self._predict_worker.moveToThread(self._predict_worker_thread)
     
     # Start worker when thread starts
     self._predict_worker_thread.started.connect(self._predict_worker.run)
 
-    # Ensure UI messages and result handling
-    self._predict_worker.sig_message.connect(self.set_message)
+    # Ensure UI result handling
     self._predict_worker.sig_output.connect(self.on_predict_finished)
 
     # Make thread stop when worker emits sig_output
@@ -588,7 +627,23 @@ class PluginManager(QWidget):
     # Start worker thread
     self._predict_worker_thread.start()
     
-  def on_predict_finished(self, data):
+  def on_predict_finished(self, error, error_msg, data):
+    
+    # Stop if PredictWorker failed
+    if error is True:
+      
+      msg_intro = 'PredictWorker failed with the following error:\n\n'
+      
+      print(f'{msg_intro}{error_msg}')
+      
+      self._channel_mismatch = False
+            
+      self.set_message(f'{msg_intro}{error_msg}', 
+                       MessageLevel.ERROR)
+      
+      self.btn_clear.setEnabled(True)
+      
+      return
     
     # Update data attribute with predict worker output
     self.data = data
@@ -614,8 +669,8 @@ class PluginManager(QWidget):
     
     # Disable 'min n pix boxes', 'Adjust size filter', 'Apply edits' and 'Clear' buttons
     # => 'Adjust size filter' and 'Apply edits' buttons do not exist yet if predictions are returned for the first time 
-    for i in [self.box_min_n_pix_ch0, 
-              self.box_min_n_pix_ch1,
+    for i in [self.box_min_area_ch0, 
+              self.box_min_area_ch1,
               self.btn_filter_size,
               self.btn_apply_edits,
               self.btn_clear]:
@@ -632,8 +687,7 @@ class PluginManager(QWidget):
     # Start worker when thread starts
     self._filter_size_worker_thread.started.connect(self._filter_size_worker.run)
 
-    # Ensure UI messages and result handling
-    self._filter_size_worker.sig_message.connect(self.set_message)
+    # Ensure UI result handling
     self._filter_size_worker.sig_output.connect(self.on_filter_size_finished)
 
     # Make thread stop when worker emits sig_output
@@ -657,7 +711,23 @@ class PluginManager(QWidget):
     # Start worker thread
     self._filter_size_worker_thread.start()
     
-  def on_filter_size_finished(self, data):    
+  def on_filter_size_finished(self, error, error_msg, data):    
+    
+    # Stop if FilterSizeWorker failed
+    if error is True:
+      
+      msg_intro = 'FilterSizeWorker failed with the following error:\n\n'
+      
+      print(f'{msg_intro}{error_msg}')
+      
+      self._channel_mismatch = False
+            
+      self.set_message(f'{msg_intro}{error_msg}', 
+                       MessageLevel.ERROR)
+      
+      self.btn_clear.setEnabled(True)
+      
+      return
     
     # Update data attribute with filter size worker output
     self.data = data
@@ -702,8 +772,8 @@ class PluginManager(QWidget):
     
     # Re-enable 'min n pix' boxes, 'Adjust size filter', 'Apply edits' and 'Clear' buttons
     # => 'Adjust size filter' and 'Apply edits' buttons are already enabled if predictions are returned for the first time 
-    for i in [self.box_min_n_pix_ch0, 
-              self.box_min_n_pix_ch1,
+    for i in [self.box_min_area_ch0, 
+              self.box_min_area_ch1,
               self.btn_filter_size,
               self.btn_apply_edits,
               self.btn_clear]:
@@ -716,8 +786,8 @@ class PluginManager(QWidget):
   def on_apply_edits_clicked(self):
     
     # Remove 'min n pix' boxes, 'Adjust size filter' and 'Apply edits' buttons from viewer
-    for i in ['box_min_n_pix_ch0',
-              'box_min_n_pix_ch1',
+    for i in ['box_min_area_ch0',
+              'box_min_area_ch1',
               'btn_filter_size',
               'btn_apply_edits']:
       
@@ -746,8 +816,7 @@ class PluginManager(QWidget):
     # Start worker when thread starts
     self._apply_edits_worker_thread.started.connect(self._apply_edits_worker.run)
 
-    # Ensure UI messages and result handling
-    self._apply_edits_worker.sig_message.connect(self.set_message)
+    # Ensure UI result handling
     self._apply_edits_worker.sig_output.connect(self.on_apply_edits_finished)
 
     # Make thread stop when worker emits sig_output
@@ -771,7 +840,23 @@ class PluginManager(QWidget):
     # Start worker thread
     self._apply_edits_worker_thread.start()
     
-  def on_apply_edits_finished(self, data):
+  def on_apply_edits_finished(self, error, error_msg, data):
+    
+    # Stop if ApplyEditsWorker failed
+    if error is True:
+      
+      msg_intro = 'ApplyEditsWorker failed with the following error:\n\n'
+      
+      print(f'{msg_intro}{error_msg}')
+      
+      self._channel_mismatch = False
+            
+      self.set_message(f'{msg_intro}{error_msg}', 
+                       MessageLevel.ERROR)
+      
+      self.btn_clear.setEnabled(True)
+      
+      return
     
     # Update data attribute with apply edits worker output
     self.data = data
@@ -803,13 +888,13 @@ class PluginManager(QWidget):
     self.viewer.layers.selection.active = self.layers['merge']
 
     # Add 'min % ovl' boxes and 'Find overlaps' button to viewer 
-    self.box_min_pct_ovl_ch0_by_ch1 = ParamValueBox(label=f'min %ovl {self.ch_names[0]}/{self.ch_names[1]}:', 
+    self.box_min_pct_ovl_ch0_by_ch1 = ParamValueBox(label=f'min % overlap {self.ch_names[0]} / {self.ch_names[1]}', 
                                                     default=self.config['min_pct_ovl_ch0_by_ch1'],
                                                     min_val=0.0, 
                                                     max_val=100.0)
     self.box_min_pct_ovl_ch0_by_ch1.valueChanged.connect(self.on_min_pct_ovl_ch0_by_ch1_changed)
     
-    self.box_min_pct_ovl_ch1_by_ch0 = ParamValueBox(label=f'min %ovl {self.ch_names[1]}/{self.ch_names[0]}:', 
+    self.box_min_pct_ovl_ch1_by_ch0 = ParamValueBox(label=f'min % overlap {self.ch_names[1]} / {self.ch_names[0]}', 
                                                     default=self.config['min_pct_ovl_ch1_by_ch0'],
                                                     min_val=0.0, 
                                                     max_val=100.0)
@@ -878,8 +963,7 @@ class PluginManager(QWidget):
     # Start worker when thread starts
     self._overlap_worker_thread.started.connect(self._overlap_worker.run)
 
-    # Ensure UI messages and result handling
-    self._overlap_worker.sig_message.connect(self.set_message)
+    # Ensure UI result handling
     self._overlap_worker.sig_output.connect(self.on_overlap_finished)
 
     # Make thread stop when worker emits sig_output
@@ -903,7 +987,23 @@ class PluginManager(QWidget):
     # Start worker thread
     self._overlap_worker_thread.start()
     
-  def on_overlap_finished(self, data):
+  def on_overlap_finished(self, error, error_msg, data):
+    
+    # Stop if OverlapWorker failed
+    if error is True:
+      
+      msg_intro = 'OverlapWorker failed with the following error:\n\n'
+      
+      print(f'{msg_intro}{error_msg}')
+      
+      self._channel_mismatch = False
+            
+      self.set_message(f'{msg_intro}{error_msg}', 
+                       MessageLevel.ERROR)
+      
+      self.btn_clear.setEnabled(True)
+      
+      return
     
     # Update data attribute with overlap worker output
     self.data = data
@@ -925,52 +1025,126 @@ class PluginManager(QWidget):
     
     self.layers['merge'].visible = True
     
-    # Add 'Adjust overlap filter' and 'Save results' buttons to viewer if overlaps are returned for the first time
+    # Add 'Adjust overlap filter' button, 'overlap count' boxes and 'Save results' button to viewer if overlaps are returned for the first time
     if not self._filter_overlap_requested:
       
       self.btn_filter_overlap = QPushButton('Adjust overlap filter')
       self.btn_filter_overlap.clicked.connect(self.on_filter_overlap_clicked)
       
+      # ch0-pos / ch1-neg
+      self.box_n_ch0pos_ch1neg = ParamValueBox(label=f'n {self.ch_names[0]}\u207A / {self.ch_names[1]}\u207B')
+      
+      self.box_n_ch0pos_ch1neg.valueChanged.connect(self.on_n_ch0pos_ch1neg_changed)
+      
+      self.box_tube_ch0pos_ch1neg = ParamValueBox(label=f'tube ID {self.ch_names[0]}\u207A / {self.ch_names[1]}\u207B',
+                                                  default=self.config['elements']['ch0-pos/ch1-neg']['tube_id'],
+                                                  min_val=1,
+                                                  max_val=8)
+      
+      self.box_tube_ch0pos_ch1neg.valueChanged.connect(self.on_tube_ch0pos_ch1neg_changed)
+      
+      # ch0-pos / ch1-pos
+      self.box_n_ch0pos_ch1pos = ParamValueBox(label=f'n {self.ch_names[0]}\u207A / {self.ch_names[1]}\u207A')
+      
+      self.box_n_ch0pos_ch1neg.valueChanged.connect(self.on_n_ch0pos_ch1neg_changed)
+      
+      self.box_tube_ch0pos_ch1pos = ParamValueBox(label=f'tube ID {self.ch_names[0]}\u207A / {self.ch_names[1]}\u207A',
+                                                  default=self.config['elements']['ch0-pos/ch1-pos']['tube_id'],
+                                                  min_val=1,
+                                                  max_val=8)
+      
+      self.box_tube_ch0pos_ch1neg.valueChanged.connect(self.on_tube_ch0pos_ch1neg_changed)
+      
+      # ch0-pos / ch1-amb
+      self.box_n_ch0pos_ch1amb = ParamValueBox(label=f'n {self.ch_names[0]}\u207A / {self.ch_names[1]}-amb')
+      
+      self.box_n_ch0pos_ch1amb.valueChanged.connect(self.on_n_ch0pos_ch1amb_changed)
+      
+      self.box_tube_ch0pos_ch1amb = ParamValueBox(label=f'tube ID {self.ch_names[0]}\u207A / {self.ch_names[1]}-amb',
+                                                  default=self.config['elements']['ch0-pos/ch1-amb']['tube_id'],
+                                                  min_val=1,
+                                                  max_val=8)
+      
+      self.box_tube_ch0pos_ch1amb.valueChanged.connect(self.on_tube_ch0pos_ch1amb_changed)
+      
+      # ch1-pos / ch0-neg
+      self.box_n_ch1pos_ch0neg = ParamValueBox(label=f'n {self.ch_names[1]}\u207A / {self.ch_names[0]}\u207B')
+      
+      self.box_n_ch1pos_ch0neg.valueChanged.connect(self.on_n_ch1pos_ch0neg_changed)
+      
+      self.box_tube_ch1pos_ch0neg = ParamValueBox(label=f'tube ID {self.ch_names[1]}\u207A / {self.ch_names[0]}\u207B',
+                                                  default=self.config['elements']['ch1-pos/ch0-neg']['tube_id'],
+                                                  min_val=1,
+                                                  max_val=8)
+      
+      self.box_tube_ch1pos_ch0neg.valueChanged.connect(self.on_tube_ch1pos_ch0neg_changed)
+      
+      # ch1-pos / ch0-amb
+      self.box_n_ch1pos_ch0amb = ParamValueBox(label=f'n {self.ch_names[1]}\u207A / {self.ch_names[0]}-amb')
+      
+      self.box_n_ch1pos_ch0amb.valueChanged.connect(self.on_n_ch1pos_ch0amb_changed)
+      
+      self.box_tube_ch1pos_ch0amb = ParamValueBox(label=f'tube ID {self.ch_names[1]}\u207A / {self.ch_names[0]}-amb',
+                                                  default=self.config['elements']['ch1-pos/ch0-amb']['tube_id'],
+                                                  min_val=1,
+                                                  max_val=8)
+      
+      self.box_tube_ch1pos_ch0amb.valueChanged.connect(self.on_tube_ch1pos_ch0amb_changed)
+
       self.btn_save = QPushButton('Save results')
       self.btn_save.clicked.connect(self.on_save_clicked)
       
-      for i, j in zip([2, 3],
+      for i, j in zip([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13],
                       [self.btn_filter_overlap,
+                       self.box_n_ch0pos_ch1neg,
+                       self.box_n_ch0pos_ch1pos,
+                       self.box_n_ch0pos_ch1amb,
+                       self.box_n_ch1pos_ch0neg,
+                       self.box_n_ch1pos_ch0amb,
+                       self.box_tube_ch0pos_ch1neg,
+                       self.box_tube_ch0pos_ch1pos,
+                       self.box_tube_ch0pos_ch1amb,
+                       self.box_tube_ch1pos_ch0neg,
+                       self.box_tube_ch1pos_ch0amb,
                        self.btn_save]):
         
         self.layout.insertWidget(i, j)
         
-    # Re-enable 'min % ovl' boxes, 'Adjust overlap filter', 'Save results' and 'Clear' buttons
-    # => 'Adjust overlap filter' and 'Save results' buttons do not exist yet if overlaps are returned for the first time 
+    # Re-enable 'min % ovl' and 'overlap count' boxes, 'Adjust overlap filter', 'Save results' and 'Clear' buttons
+    # => 'Adjust overlap filter' button, 'overlap count' boxes and 'Save results' button do not exist yet if overlaps are returned for the first time 
     for i in [self.box_min_pct_ovl_ch0_by_ch1,
               self.box_min_pct_ovl_ch1_by_ch0, 
               self.btn_filter_overlap,
+              self.box_n_ch0pos_ch1neg,
+              self.box_n_ch0pos_ch1pos,
+              self.box_n_ch0pos_ch1amb,
+              self.box_n_ch1pos_ch0neg,
+              self.box_n_ch1pos_ch0amb,
+              self.box_tube_ch0pos_ch1neg,
+              self.box_tube_ch0pos_ch1pos,
+              self.box_tube_ch0pos_ch1amb,
+              self.box_tube_ch1pos_ch0neg,
+              self.box_tube_ch1pos_ch0amb,
               self.btn_save,
               self.btn_clear]:
       
       i.setEnabled(True)
     
+    # Update 'overlap count' boxes 
+    self._update_overlap_count_boxes()
+    
     # Message cell status summary 
     summary = f'''Count summary
     
+    - {self.ch_names[0]}\u207A / {self.ch_names[1]}\u207B ({self.config['elements']['ch0-pos/ch1-neg']['color']}): {self.data[self.ch_names[0]]['summary']['neg']}
     
-    ~> {self.ch_names[0]} 
+    - {self.ch_names[0]}\u207A / {self.ch_names[1]}\u207A ({self.config['elements']['ch0-pos/ch1-pos']['color']}): {self.data[self.ch_names[0]]['summary']['pos']}
     
-        - total: {self.data[self.ch_names[0]]['summary']['total']}
-        - {self.ch_names[1]}-neg: {self.data[self.ch_names[0]]['summary']['neg']}
-        - {self.ch_names[1]}-pos: {self.data[self.ch_names[0]]['summary']['pos']}
-        - {self.ch_names[1]}-ambiguous: {self.data[self.ch_names[0]]['summary']['amb']}
+    - {self.ch_names[0]}\u207A / {self.ch_names[1]}-ambiguous ({self.config['elements']['ch0-pos/ch1-amb']['color']}): {self.data[self.ch_names[0]]['summary']['amb']}
     
+    - {self.ch_names[1]}\u207A / {self.ch_names[0]}\u207B ({self.config['elements']['ch1-pos/ch0-neg']['color']}): {self.data[self.ch_names[1]]['summary']['neg']}
     
-    ~> {self.ch_names[1]} 
-    
-        - total: {self.data[self.ch_names[1]]['summary']['total']}
-        - {self.ch_names[0]}-neg: {self.data[self.ch_names[1]]['summary']['neg']}
-        - {self.ch_names[0]}-pos: {self.data[self.ch_names[1]]['summary']['pos']}
-        - {self.ch_names[0]}-ambiguous: {self.data[self.ch_names[1]]['summary']['amb']}
-    
-    
-    See merge image in viewer
+    - {self.ch_names[1]}\u207A / {self.ch_names[0]}-ambiguous ({self.config['elements']['ch1-pos/ch0-amb']['color']}): {self.data[self.ch_names[1]]['summary']['amb']}
     '''
     
     self.set_message(summary, 
@@ -983,7 +1157,11 @@ class PluginManager(QWidget):
                                 self.metadata['img_nm'])
     
     # Construct element list and write to file 
-    self.elem_list = workflow.make_elem_txt(data_dict=self.data, metadata_dict=self.metadata)
+    self.elem_list = workflow.make_elem_txt(data_dict=self.data, 
+                                            metadata_dict=self.metadata,
+                                            colors=['red', 'green', 'yellow', 'blue'],
+                                            laser_fun='RoboLPC',
+                                            dest_wells=['Tube 1', 'Tube 2', 'Tube 3', 'Tube 4'])
     
     with open(os.path.join(out_dir_path, 'elem_list.txt'), 'w') as f:
       f.write(self.elem_list)
@@ -1000,13 +1178,13 @@ class PluginManager(QWidget):
     self.set_message(f"Results saved at:\n{self.config['out_dir_path']}\n\nIn subfolder:\n{self.metadata['img_nm']}",
                      MessageLevel.SAVE)
 
-  def on_min_n_pix_ch0_changed(self, value):
+  def on_min_area_ch0_changed(self, value):
 
-    self.config['channels'][0]['min_n_pix'] = float(value)
+    self.config['channels'][0]['min_area_um2'] = float(value)
     
-  def on_min_n_pix_ch1_changed(self, value):
+  def on_min_area_ch1_changed(self, value):
 
-    self.config['channels'][1]['min_n_pix'] = float(value)
+    self.config['channels'][1]['min_area_um2'] = float(value)
   
   def on_min_pct_ovl_ch0_by_ch1_changed(self, value):
 
@@ -1016,12 +1194,108 @@ class PluginManager(QWidget):
 
     self.config['min_pct_ovl_ch1_by_ch0'] = float(value)
   
+  def _update_overlap_count_boxes(self):
+    
+    n_ch0pos_ch1neg = self.data[self.ch_names[0]]['summary']['neg'] 
+    n_ch0pos_ch1neg_def = n_ch0pos_ch1neg if self.config['elements']['ch0-pos/ch1-neg']['collect'] is True else 0
+    
+    n_ch0pos_ch1pos = self.data[self.ch_names[0]]['summary']['pos']
+    n_ch0pos_ch1pos_def = n_ch0pos_ch1pos if self.config['elements']['ch0-pos/ch1-pos']['collect'] is True else 0
+    
+    n_ch0pos_ch1amb = self.data[self.ch_names[0]]['summary']['amb'] 
+    n_ch0pos_ch1amb_def = n_ch0pos_ch1amb if self.config['elements']['ch0-pos/ch1-amb']['collect'] is True else 0
+    
+    n_ch1pos_ch0neg = self.data[self.ch_names[1]]['summary']['neg'] 
+    n_ch1pos_ch0neg_def = n_ch1pos_ch0neg if self.config['elements']['ch1-pos/ch0-neg']['collect'] is True else 0
+
+    n_ch1pos_ch0amb = self.data[self.ch_names[1]]['summary']['amb'] 
+    n_ch1pos_ch0amb_def = n_ch1pos_ch0amb if self.config['elements']['ch1-pos/ch0-amb']['collect'] is True else 0
+
+    # update ch0-pos/ch1-neg box
+    if self.box_n_ch0pos_ch1neg is not None:
+      spin = self.box_n_ch0pos_ch1neg._spin
+      spin.blockSignals(True)
+      spin.setMaximum(n_ch0pos_ch1neg)
+      spin.setValue(n_ch0pos_ch1neg_def)
+      spin.blockSignals(False)
+
+    # update ch0-pos/ch1-pos box
+    if self.box_n_ch0pos_ch1pos is not None:
+      spin = self.box_n_ch0pos_ch1pos._spin
+      spin.blockSignals(True)
+      spin.setMaximum(n_ch0pos_ch1pos)
+      spin.setValue(n_ch0pos_ch1pos_def)
+      spin.blockSignals(False)
+    
+    # update ch0-pos/ch1-amb box
+    if self.box_n_ch0pos_ch1amb is not None:
+      spin = self.box_n_ch0pos_ch1amb._spin
+      spin.blockSignals(True)
+      spin.setMaximum(n_ch0pos_ch1amb)
+      spin.setValue(n_ch0pos_ch1amb_def)
+      spin.blockSignals(False)
+    
+    # update ch1-pos/ch0-neg box
+    if self.box_n_ch1pos_ch0neg is not None:
+      spin = self.box_n_ch1pos_ch0neg._spin
+      spin.blockSignals(True)
+      spin.setMaximum(n_ch1pos_ch0neg)
+      spin.setValue(n_ch1pos_ch0neg_def)
+      spin.blockSignals(False)
+      
+    # update ch1-pos/ch0-amb box
+    if self.box_n_ch1pos_ch0amb is not None:
+      spin = self.box_n_ch1pos_ch0amb._spin
+      spin.blockSignals(True)
+      spin.setMaximum(n_ch1pos_ch0amb)
+      spin.setValue(n_ch1pos_ch0amb_def)
+      spin.blockSignals(False)
+              
+  def on_n_ch0pos_ch1neg_changed(self, value):
+        
+    self.config['elements']['ch0-pos/ch1-neg']['n_collect'] = float(value)
+  
+  def on_tube_ch0pos_ch1neg_changed(self, value):
+    
+    self.config['elements']['ch0-pos/ch1-neg']['tube_id'] = float(value)
+  
+  def on_n_ch0pos_ch1pos_changed(self, value):
+        
+    self.config['elements']['ch0-pos/ch1-pos']['n_collect'] = float(value)
+  
+  def on_tube_ch0pos_ch1pos_changed(self, value):
+    
+    self.config['elements']['ch0-pos/ch1-pos']['tube_id'] = float(value)
+  
+  def on_n_ch0pos_ch1amb_changed(self, value):
+        
+    self.config['elements']['ch0-pos/ch1-amb']['n_collect'] = float(value)
+  
+  def on_tube_ch0pos_ch1amb_changed(self, value):
+    
+    self.config['elements']['ch0-pos/ch1-amb']['tube_id'] = float(value)
+  
+  def on_n_ch1pos_ch0neg_changed(self, value):
+        
+    self.config['elements']['ch1-pos/ch0-neg']['n_collect'] = float(value)
+  
+  def on_tube_ch1pos_ch0neg_changed(self, value):
+    
+    self.config['elements']['ch1-pos/ch0-neg']['tube_id'] = float(value)
+    
+  def on_n_ch1pos_ch0amb_changed(self, value):
+        
+    self.config['elements']['ch1-pos/ch0-amb']['n_collect'] = float(value)
+  
+  def on_tube_ch1pos_ch0amb_changed(self, value):
+    
+    self.config['elements']['ch1-pos/ch0-amb']['tube_id'] = float(value)
+
 # %% LoadWorker() ----
 
 class LoadWorker(QObject):
-  
-  sig_message = Signal(str)                  
-  sig_output = Signal(object, object)
+                 
+  sig_output = Signal(bool, str, object, object)
   
   def __init__(self, 
                path: str, 
@@ -1036,83 +1310,108 @@ class LoadWorker(QObject):
     
   def run(self):
     
-    # Define output paths 
-    out_dir_path = os.path.join(Path(self.config['out_dir_path']).expanduser(), 
+    try:
+      
+      # Define output paths 
+      out_dir_path = os.path.join(Path(self.config['out_dir_path']).expanduser(), 
                                 Path(self.path).stem)
     
-    ome_tiff_file_path = os.path.join(out_dir_path, Path(self.path).stem+'.ome.tiff')
+      ome_tiff_file_path = os.path.join(out_dir_path, Path(self.path).stem+'.ome.tiff')
     
-    # Convert PALM .zvi file to OME-TIFF
-    workflow.convert_zvi_to_ome(file=self.path, 
-                                out_dir_path=out_dir_path,
-                                jar_pkg='napari_bruce.bioformats',
-                                jar_name='bioformats_package.jar')
+      # Convert PALM .zvi file to OME-TIFF
+      workflow.convert_zvi_to_ome(file=self.path, 
+                                  out_dir_path=out_dir_path,
+                                  jar_pkg='napari_bruce.bioformats',
+                                  jar_name='bioformats_package.jar')
     
-    # Load images and associated metadata
-    self.data, self.metadata = workflow.load_ome_tiff(file=ome_tiff_file_path)
+      # Load images and associated metadata
+      self.data, self.metadata = workflow.load_ome_tiff(file=ome_tiff_file_path)
     
-    # Subset data and metadata to the first 2 channels
-    self.data = dict(list(self.data.items())[:2])
+      # Subset data and metadata to the first 2 channels
+      self.data = dict(list(self.data.items())[:2])
     
-    self.metadata['channels'] = dict(list(self.metadata['channels'].items())[:2])
+      self.metadata['channels'] = dict(list(self.metadata['channels'].items())[:2])
     
-    # For each channel...
-    for i, k in enumerate(self.data.keys()):
+      # For each channel...
+      for i, k in enumerate(self.data.keys()):
       
-      # Extract config
-      ch_config = self.config['channels'][i]
+        # Extract config
+        ch_config = self.config['channels'][i]
       
-      # Perform robust normalization      
-      self.data[k]['norm_img'] = workflow.robust_normalization(img=self.data[k]['img'], 
-                                                               low_pct=ch_config['low_pct'], 
-                                                               high_pct=ch_config['high_pct']) 
-                    
-    self.sig_output.emit(self.data, self.metadata)
+        # Perform robust normalization      
+        self.data[k]['norm_img'] = workflow.robust_normalization(img=self.data[k]['img'], 
+                                                                 low_pct=ch_config['low_pct'], 
+                                                                 high_pct=ch_config['high_pct']) 
+      
+      error = False
+      error_msg = ''    
+                
+    except Exception as e:
+      
+      error = True
+      error_msg = f'{type(e).__name__}: {e}'
+      
+    self.sig_output.emit(error, error_msg, self.data, self.metadata)
           
 # %% PredictWorker() ----
 
 class PredictWorker(QObject):
   
-  sig_message = Signal(str)                  
-  sig_output = Signal(object)
+  sig_output = Signal(bool, str, object)
   
   def __init__(self, 
                data: object, 
+               metadata: object,
                ch_names: object,
                parent=None):
     
     super().__init__(parent)
     self.data = data
+    self.metadata = metadata
     self.ch_names = ch_names
     
   def run(self):
     
-    # For each channel...    
-    for k, v in self.ch_names.items():
+    try:
       
-      # Run StarDist
-      img = normalize(self.data[v]['norm_img'])
+      # For each channel...    
+      for k, v in self.ch_names.items():
+      
+        # Run StarDist
+        img = normalize(self.data[v]['norm_img'])
         
-      n_tiles = workflow.choose_stardist_n_tiles(img)
+        n_tiles = workflow.choose_stardist_n_tiles(img)
       
-      with open(os.devnull, 'w') as f, redirect_stdout(f), redirect_stderr(f):
+        with open(os.devnull, 'w') as f, redirect_stdout(f), redirect_stderr(f):
         
-        self.data[v]['msk'] = models[k].predict_instances(img=img,
-                                                          prob_thresh=None,
-                                                          nms_thresh=None, 
-                                                          n_tiles=n_tiles)[0]
+          self.data[v]['msk'] = models[k].predict_instances(img=img,
+                                                            prob_thresh=None,
+                                                            nms_thresh=None, 
+                                                            n_tiles=n_tiles)[0]
       
-      # Compute submask area
-      self.data[v]['msk_area'] = workflow.count_submsks_pixels(msk=self.data[v]['msk'])
-              
-    self.sig_output.emit(self.data)
+        # Compute submask area
+        self.data[v]['msk_area'] = workflow.count_submsks_pixels(msk=self.data[v]['msk'])
+        
+        # Convert area in pixel^2 to µm^2
+        px_area_um2 = self.metadata['image']['px_area_um2']
+    
+        self.data[v]['msk_area_um2'] = {k:v*px_area_um2 for k, v in self.data[v]['msk_area'].items()}
+        
+      error = False
+      error_msg = ''    
+                
+    except Exception as e:
+      
+      error = True
+      error_msg = f'{type(e).__name__}: {e}'
+      
+    self.sig_output.emit(error, error_msg, self.data)      
 
 # %% FilterSizeWorker() ----
 
 class FilterSizeWorker(QObject):
   
-  sig_message = Signal(str)                  
-  sig_output = Signal(object)
+  sig_output = Signal(bool, str, object)
   
   def __init__(self, 
                data: object, 
@@ -1127,27 +1426,36 @@ class FilterSizeWorker(QObject):
     
   def run(self):
     
-    # For each channel...
-    for k, v in self.ch_names.items():
+    try:
       
-      # Extract config
-      ch_config = self.config['channels'][k]
+      # For each channel...
+      for k, v in self.ch_names.items():
       
-      # Discard small submasks
-      self.data[v]['filt_msk'] = workflow.discard_small_submsks(msk=self.data[v]['msk'], 
-                                                                pix_dict=self.data[v]['msk_area'],
-                                                                min_n_pix=ch_config['min_n_pix'])
+        # Extract config
+        ch_config = self.config['channels'][k]
       
-      self.data[v]['filt_msk_edited'] = self.data[v]['filt_msk'].copy()
-              
-    self.sig_output.emit(self.data)
+        # Discard small submasks
+        self.data[v]['filt_msk'] = workflow.discard_small_submsks(msk=self.data[v]['msk'], 
+                                                                  pix_dict=self.data[v]['msk_area_um2'],
+                                                                  min_n_pix=ch_config['min_area_um2'])
+      
+        self.data[v]['filt_msk_edited'] = self.data[v]['filt_msk'].copy()
+      
+      error = False
+      error_msg = ''    
+                
+    except Exception as e:
+      
+      error = True
+      error_msg = f'{type(e).__name__}: {e}'        
+    
+    self.sig_output.emit(error, error_msg, self.data)    
     
 # %% ApplyEditsWorker() ----
 
 class ApplyEditsWorker(QObject):
   
-  sig_message = Signal(str)                  
-  sig_output = Signal(object)
+  sig_output = Signal(bool, str, object)
   
   def __init__(self, 
                layers: object,
@@ -1164,75 +1472,84 @@ class ApplyEditsWorker(QObject):
     
   def run(self):
     
-    # For each channel...
-    for k in self.ch_names.values():
+    try:
       
-      # Retrieve user-edited cell predictions
-      self.data[k]['filt_msk_edited'] = self.layers[k]['labels_layer'].data.copy()
+      # For each channel...
+      for k in self.ch_names.values():
       
-      # Retrieve user-drawn cell shapes
-      self.data[k]['user_submsks'] = self.layers[k]['shapes_layer'].data.copy()
+        # Retrieve user-edited cell predictions
+        self.data[k]['filt_msk_edited'] = self.layers[k]['labels_layer'].data.copy()
       
-      # If user drew cell shapes, add them to the edited cell predictions and compute their area
-      if len(self.data[k]['user_submsks']) > 0:
+        # Retrieve user-drawn cell shapes
+        self.data[k]['user_submsks'] = self.layers[k]['shapes_layer'].data.copy()
+      
+        # If user drew cell shapes, add them to the edited cell predictions and compute their area
+        if len(self.data[k]['user_submsks']) > 0:
                 
-        self.data[k]['filt_msk_edited'] = workflow.append_shapes_to_msk(msk=self.data[k]['filt_msk_edited'],
-                                                                        shapes=self.data[k]['user_submsks'],
-                                                                        start_idx=int(np.max(self.data[k]['filt_msk'])+1))
+          self.data[k]['filt_msk_edited'] = workflow.append_shapes_to_msk(msk=self.data[k]['filt_msk_edited'],
+                                                                          shapes=self.data[k]['user_submsks'],
+                                                                          start_idx=int(np.max(self.data[k]['filt_msk'])+1))
         
-        tmp = self.data[k]['filt_msk_edited'].copy()
+          tmp = self.data[k]['filt_msk_edited'].copy()
       
-        tmp = np.where(tmp >= int(np.max(self.data[k]['filt_msk'])+1), tmp, 0)
+          tmp = np.where(tmp >= int(np.max(self.data[k]['filt_msk'])+1), tmp, 0)
       
-        tmp = workflow.count_submsks_pixels(msk=tmp)
+          tmp = workflow.count_submsks_pixels(msk=tmp)
         
-        for j in tmp.keys():
+          for j in tmp.keys():
           
-          if j not in self.data[k]['msk_area'].keys():
+            if j not in self.data[k]['msk_area'].keys():
             
-            self.data[k]['msk_area'][j] = tmp[j]
+              self.data[k]['msk_area'][j] = tmp[j]
       
-      self.data[k]['filt_cnt_edited'] = workflow.msk_to_cnts(msk=self.data[k]['filt_msk_edited'])
+        self.data[k]['filt_cnt_edited'] = workflow.msk_to_cnts(msk=self.data[k]['filt_msk_edited'])
                     
-    # Produce base merge image 
-    ch0 = self.data[self.ch_names[0]]['norm_img'].astype(np.float32)
-    ch1 = self.data[self.ch_names[1]]['norm_img'].astype(np.float32)
+      # Produce base merge image 
+      ch0 = self.data[self.ch_names[0]]['norm_img'].astype(np.float32)
+      ch1 = self.data[self.ch_names[1]]['norm_img'].astype(np.float32)
 
-    c0_r, c0_g, c0_b, _ = to_rgba(self.config['channels'][0]['color'])
-    c1_r, c1_g, c1_b, _ = to_rgba(self.config['channels'][1]['color'])
+      c0_r, c0_g, c0_b, _ = to_rgba(self.config['channels'][0]['color'])
+      c1_r, c1_g, c1_b, _ = to_rgba(self.config['channels'][1]['color'])
 
-    scale = 0.8
-    merge_r = scale * (ch0 * c0_r + ch1 * c1_r)
-    merge_g = scale * (ch0 * c0_g + ch1 * c1_g)
-    merge_b = scale * (ch0 * c0_b + ch1 * c1_b)
+      scale = 0.8
+      merge_r = scale * (ch0 * c0_r + ch1 * c1_r)
+      merge_g = scale * (ch0 * c0_g + ch1 * c1_g)
+      merge_b = scale * (ch0 * c0_b + ch1 * c1_b)
 
-    merge_norm_img = np.stack([merge_r, merge_g, merge_b], axis=-1)
-    merge_norm_img = np.clip(merge_norm_img, 0, 255).astype(np.uint8)
+      merge_norm_img = np.stack([merge_r, merge_g, merge_b], axis=-1)
+      merge_norm_img = np.clip(merge_norm_img, 0, 255).astype(np.uint8)
     
-    self.data['merge'] = {'merge_norm_img': merge_norm_img.copy()}
+      self.data['merge'] = {'merge_norm_img': merge_norm_img.copy()}
     
-    # Add ch0 / ch1 ROIs to merge image
-    for i, j in zip([self.ch_names[0], 
-                     self.ch_names[1]],
-                    [(int(c0_r*255), int(c0_g*255), int(c0_b*255)), 
-                     (int(c1_r*255), int(c1_g*255), int(c1_b*255))]):
+      # Add ch0 / ch1 ROIs to merge image
+      for i, j in zip([self.ch_names[0], 
+                       self.ch_names[1]],
+                      [(int(c0_r*255), int(c0_g*255), int(c0_b*255)), 
+                       (int(c1_r*255), int(c1_g*255), int(c1_b*255))]):
       
-      merge_norm_img = cv2.drawContours(image=merge_norm_img,
-                                        contours=self.data[i]['filt_cnt_edited'], 
-                                        contourIdx=-1,
-                                        color=j,
-                                        thickness=4)
+        merge_norm_img = cv2.drawContours(image=merge_norm_img,
+                                          contours=self.data[i]['filt_cnt_edited'], 
+                                          contourIdx=-1,
+                                          color=j,
+                                          thickness=4)
 
-    self.data['merge']['merge_norm_img_rois'] = merge_norm_img
+      self.data['merge']['merge_norm_img_rois'] = merge_norm_img
+
+      error = False
+      error_msg = ''    
+                
+    except Exception as e:
+      
+      error = True
+      error_msg = f'{type(e).__name__}: {e}'        
     
-    self.sig_output.emit(self.data)
+    self.sig_output.emit(error, error_msg, self.data)
         
 # %% OverlapWorker() ----
 
 class OverlapWorker(QObject):
   
-  sig_message = Signal(str)                  
-  sig_output = Signal(object)
+  sig_output = Signal(bool, str, object)
   
   def __init__(self, 
                data: object, 
@@ -1248,59 +1565,76 @@ class OverlapWorker(QObject):
     
   def run(self):
     
-    ch0_nm = self.ch_names[0]
-    ch1_nm = self.ch_names[1]
-    
-    # Compute cell status 
-    self.data[ch0_nm][f'{ch1_nm}_status'], self.data[ch1_nm][f'{ch0_nm}_status'] = workflow.get_submsks1_submsks2_status(
-      msk1=self.data[ch0_nm]['filt_msk_edited'], 
-      msk2=self.data[ch1_nm]['filt_msk_edited'], 
-      min_pct_ovl_1by2=self.config['min_pct_ovl_ch0_by_ch1'],
-      min_pct_ovl_2by1=self.config['min_pct_ovl_ch1_by_ch0'],
-      submsks1_pix_dict=self.data[ch0_nm]['msk_area'],
-      submsks2_pix_dict=self.data[ch1_nm]['msk_area']
-      )
-    
-    # For each channel...
-    for i, j in zip([ch0_nm, ch1_nm],
-                    [ch1_nm, ch0_nm]):
+    try:
       
-      # Produce cell status summary
-      summary = {k:len(v) for k, v in self.data[i][f'{j}_status'].items()}
-      summary['total'] = sum(summary.values())
-      self.data[i]['summary'] = summary
-      
-      # Extract submasks and contours
-      self.data[i]['submsks'], self.data[i]['cnt']  = workflow.status_dict_to_submsks_and_cnts(
-        msk=self.data[i]['filt_msk_edited'],
-        status_dict=self.data[i][f'{j}_status']
+      ch0_nm = self.ch_names[0]
+      ch1_nm = self.ch_names[1]
+    
+      # Compute cell status 
+      self.data[ch0_nm][f'{ch1_nm}_status'], self.data[ch1_nm][f'{ch0_nm}_status'] = workflow.get_submsks1_submsks2_status(
+        msk1=self.data[ch0_nm]['filt_msk_edited'], 
+        msk2=self.data[ch1_nm]['filt_msk_edited'], 
+        min_pct_ovl_1by2=self.config['min_pct_ovl_ch0_by_ch1'],
+        min_pct_ovl_2by1=self.config['min_pct_ovl_ch1_by_ch0'],
+        submsks1_pix_dict=self.data[ch0_nm]['msk_area'],
+        submsks2_pix_dict=self.data[ch1_nm]['msk_area']
         )
     
-    # Add status ROIs to merge image
-    c0_r, c0_g, c0_b, _ = to_rgba(self.config['channels'][0]['color'])
-    c1_r, c1_g, c1_b, _ = to_rgba(self.config['channels'][1]['color'])
-        
-    status_colors_ch0 = {'neg': (int(c0_r*255), int(c0_g*255), int(c0_b*255)),
-                         'pos': (0, 255, 0),
-                         'amb': (255, 255, 0)}
-    
-    merge_norm_img = self.data['merge']['merge_norm_img'].copy()
-    
-    for i, j in status_colors_ch0.items():
+      # For each channel...
+      for i, j in zip([ch0_nm, ch1_nm],
+                      [ch1_nm, ch0_nm]):
       
-      merge_norm_img = cv2.drawContours(image=merge_norm_img,
-                                        contours=self.data[ch0_nm]['cnt'][i], 
-                                        contourIdx=-1,
-                                        color=j,
-                                        thickness=4)
-
-    merge_norm_img = cv2.drawContours(image=merge_norm_img,
-                                      contours=self.data[ch1_nm]['cnt']['neg'],
-                                      contourIdx=-1,
-                                      color=(int(c1_r*255), int(c1_g*255), int(c1_b*255)),
-                                      thickness=4)
-
-    self.data['merge']['merge_norm_img_status'] = merge_norm_img
+        # Produce cell status summary
+        summary = {k:len(v) for k, v in self.data[i][f'{j}_status'].items()}
+        summary['total'] = sum(summary.values())
+        self.data[i]['summary'] = summary
+      
+        # Extract submasks and contours
+        self.data[i]['submsks'], self.data[i]['cnt']  = workflow.status_dict_to_submsks_and_cnts(
+          msk=self.data[i]['filt_msk_edited'],
+          status_dict=self.data[i][f'{j}_status']
+          )
     
-    self.sig_output.emit(self.data)
+      # Add status ROIs to merge image      
+      c0pc1n_r, c0pc1n_g, c0pc1n_b, _ = tuple(int(i*255) for i in to_rgba(self.config['elements']['ch0-pos/ch1-neg']['color']))
+      c0pc1p_r, c0pc1p_g, c0pc1p_b, _ = tuple(int(i*255) for i in to_rgba(self.config['elements']['ch0-pos/ch1-pos']['color']))
+      c0pc1a_r, c0pc1a_g, c0pc1a_b, _ = tuple(int(i*255) for i in to_rgba(self.config['elements']['ch0-pos/ch1-amb']['color']))
+      c1pc0n_r, c1pc0n_g, c1pc0n_b, _ = tuple(int(i*255) for i in to_rgba(self.config['elements']['ch1-pos/ch0-neg']['color']))
+      c1pc0a_r, c1pc0a_g, c1pc0a_b, _ = tuple(int(i*255) for i in to_rgba(self.config['elements']['ch1-pos/ch0-amb']['color']))
+      
+      status_colors_ch0 = {'neg': (c0pc1n_r, c0pc1n_g, c0pc1n_b),
+                           'pos': (c0pc1p_r, c0pc1p_g, c0pc1p_b),
+                           'amb': (c0pc1a_r, c0pc1a_g, c0pc1a_b)}
+      
+      status_colors_ch1 = {'neg': (c1pc0n_r, c1pc0n_g, c1pc0n_b),
+                           'amb': (c1pc0a_r, c1pc0a_g, c1pc0a_b)}
     
+      merge_norm_img = self.data['merge']['merge_norm_img'].copy()
+    
+      for i, j in status_colors_ch0.items():
+      
+        merge_norm_img = cv2.drawContours(image=merge_norm_img,
+                                          contours=self.data[ch0_nm]['cnt'][i], 
+                                          contourIdx=-1,
+                                          color=j,
+                                          thickness=4)
+        
+      for i, j in status_colors_ch1.items():
+        
+        merge_norm_img = cv2.drawContours(image=merge_norm_img,
+                                          contours=self.data[ch1_nm]['cnt'][i], 
+                                          contourIdx=-1,
+                                          color=j,
+                                          thickness=4)
+
+      self.data['merge']['merge_norm_img_status'] = merge_norm_img
+      
+      error = False
+      error_msg = ''    
+                
+    except Exception as e:
+      
+      error = True
+      error_msg = f'{type(e).__name__}: {e}'        
+    
+    self.sig_output.emit(error, error_msg, self.data)    

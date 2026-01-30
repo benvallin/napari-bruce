@@ -688,8 +688,9 @@ def load_ome_tiff(file: str) -> list:
                        'physical_size_x': pixels.physical_size_x,
                        'physical_size_y': pixels.physical_size_y,
                        'position_x': stage_pos[0]['position_x'],
-                       'position_y': stage_pos[0]['position_y']}
-
+                       'position_y': stage_pos[0]['position_y'],
+                       'px_area_um2': pixels.physical_size_x * pixels.physical_size_y}
+  
   metadata['channels'] = {}
   for i, j in enumerate(zip(channels, planes)):
     
@@ -958,15 +959,21 @@ def get_palm_elem(file: str,
 # %% format_elem_cnt() ----
 
 def format_elem_cnt(elem_cnt: np.ndarray, 
-                    color: str, 
-                    id: int) -> pd.DataFrame:
+                    id: int,
+                    color: str = 'red', 
+                    laser_fun: str = 'RoboLPC',
+                    dest_well: str = 'Tube 1',
+                    objective: str = '20X') -> pd.DataFrame:
 
   """Format element contours for PALM RoboSoftware.
   
   Args:
     elem_cnt (numpy.ndarray): element-specific contours as an array of shape (N, 2).
-    color (str): color to assign to element.
     id (int): ID to assign to element.
+    color (str): color to assign to element.
+    laser_fun (str): laser function. Should be one of 'Cut', 'JointCut', 'CloseCut', 'LPC', 'LineAutoLPC', 'AutoLPC', 'CloseCut + AutoLPC', 'RoboLPC', or 'CenterRoboLPC'.
+    dest_well (str): destination vessel ID.
+    objective (str): objective used for image acquisition.
   
   Returns:
     pandas.DataFrame: element-specific DataFrame matching PALM RoboSoftware format.
@@ -977,12 +984,12 @@ def format_elem_cnt(elem_cnt: np.ndarray,
                          'Color': ['', color],
                          'Thickness': ['', '2'],
                          'No': ['', str(id)],
-                         'Laser function': ['', 'Cut'],
+                         'Laser function': ['', laser_fun],
                          'CutShot': ['', '0,0'],
                          'Area': ['', '-'], 
                          'Z': ['', '-'], 
-                         'Well': ['', 'manual'], 
-                         'Objective': ['', '20X'],
+                         'Well': ['', dest_well], 
+                         'Objective': ['', objective],
                          'Comment': ['', '.'],
                          'Coordinates': ['', '']})
     
@@ -1019,14 +1026,19 @@ def format_elem_cnt(elem_cnt: np.ndarray,
 
 def make_elem_txt(data_dict: dict, 
                   metadata_dict: dict, 
-                  colors: list = ['red', 'blue', 'yellow', 'green']) -> str:
+                  colors: list = ['red', 'green', 'yellow', 'blue'],
+                  laser_fun: str = 'RoboLPC',
+                  dest_wells: list = ['Tube 1', 'Tube 2', 'Tube 3', 'Tube 4']) -> str:
 
   """Create string with PALM element properties.
   
   Args:
     data_dict (dict): dict of image data.
     metadata_dict (dict): dict of image metadata.
-    colors (list): list of colors to assign to simple positive, double positive and ambiguous double positive elements, respectively.
+    colors (list): list of colors to assign to ch0-pos/ch1-neg, ch0-pos/ch1-pos, ch0-pos/ch1-amb and ch1-pos/ch0-neg, respectively.
+    simple positive, double positive and ambiguous double positive elements, respectively.
+    laser_fun (str): laser function. Should be one of 'Cut', 'JointCut', 'CloseCut', 'LPC', 'LineAutoLPC', 'AutoLPC', 'CloseCut + AutoLPC', 'RoboLPC', or 'CenterRoboLPC'.
+    dest_wells (str): list of destination vessel IDs to assign to ch0-pos/ch1-neg, ch0-pos/ch1-pos, ch0-pos/ch1-amb and ch1-pos/ch0-neg, respectively.
   
   Returns:
     str: string with PALM element properties to be written to .txt file.
@@ -1043,6 +1055,8 @@ MICROMETER
 Elements :\n
 '''
 
+  objective = f"{int(metadata_dict['objectives']['nominal_magnification'])}X"
+  
   ch0_nm = metadata_dict['channels'][0]['name']
   ch1_nm = metadata_dict['channels'][1]['name']
 
@@ -1054,15 +1068,20 @@ Elements :\n
   output = []
   total_length = 0
   start_id = 1
-  for i, j in zip([ch0_cnt_neg, ch0_cnt_pos, ch0_cnt_amb, ch1_cnt_neg], colors):
+  for i, j, k in zip([ch0_cnt_neg, ch0_cnt_pos, ch0_cnt_amb, ch1_cnt_neg], colors, dest_wells):
     
     length = len(i) 
     
     if length > 0:
       
-      tmp = [scale_elem_cnt(elem_cnt=k, metadata_dict=metadata_dict, to='PALM') for k in i]
+      tmp = [scale_elem_cnt(elem_cnt=x, metadata_dict=metadata_dict, to='PALM') for x in i]
     
-      tmp = [format_elem_cnt(elem_cnt=k, color=j, id=str(l)) for k, l in zip(tmp, np.arange(start_id, start_id+length+1))]
+      tmp = [format_elem_cnt(elem_cnt=x, 
+                             id=str(y), 
+                             color=j, 
+                             laser_fun=laser_fun, 
+                             dest_well=k, 
+                             objective=objective) for x, y in zip(tmp, np.arange(start_id, start_id+length+1))]
       
       output.extend(tmp)
       

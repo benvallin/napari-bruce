@@ -17,4 +17,5 @@ venv/
 
 # Dev hide
 config.json
-
+deprecated/
+dev/
