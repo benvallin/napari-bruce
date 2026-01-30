@@ -92,7 +92,7 @@ def spin_until(condition, message='Waiting…', delay=0.08, timeout=None):
 
 def launch_napari_with_plugin(timeout=60.0):
   
-  ready_file = Path(tempfile.gettempdir()) / 'napari_bruce_ready'
+  ready_file = Path(os.path.join(tempfile.gettempdir(), 'napari_bruce_ready'))
   
   try:
     
