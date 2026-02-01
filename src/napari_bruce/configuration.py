@@ -60,6 +60,39 @@ def list_stardist_models() -> dict:
   
   return output
 
+# %% list_laser_functions() ----
+
+def list_laser_functions() -> list:
+  
+  """List available laser functions.
+  
+  Returns:
+    list: available laser function.
+  
+  """
+  
+  output = ['',
+            'Cut', 'JointCut', 'CloseCut', 
+            'LPC', 'LineAutoLPC', 'AutoLPC', 
+            'CloseCut + AutoLPC', 'RoboLPC', 'CenterRoboLPC']
+  
+  return output
+
+# %% list_tube_ids() ----
+
+def list_tube_ids() -> list:
+  
+  """List available tube IDs.
+  
+  Returns:
+    list: available tube IDs.
+  
+  """
+  
+  output = ['']+[f'Tube {i}' for i in list(range(1,9))]
+  
+  return output
+
 # %% check_config_integrity() ----
 
 class ConfigError(RuntimeError):
@@ -130,7 +163,7 @@ def check_config_integrity(config: dict) -> None:
   exp_subelem_kv = {'color': str,
                     'collect': bool,
                     'laser_function': str,
-                    'tube_id': int}
+                    'tube_id': str}
   
   check_dict_kv(exp_kv=exp_main_kv, 
                 in_dict=config, 
@@ -168,12 +201,9 @@ def check_config_integrity(config: dict) -> None:
                 in_dict=config['elements'], 
                 dict_nm='config elements')
   
-  available_laser_functions = ['',
-                               'Cut', 'JointCut', 'CloseCut', 
-                               'LPC', 'LineAutoLPC', 'AutoLPC', 
-                               'CloseCut + AutoLPC', 'RoboLPC', 'CenterRoboLPC']
+  available_laser_functions = list_laser_functions()
   
-  available_tube_ids = list(range(1,9))
+  available_tube_ids = list_tube_ids()
   
   for i in config['elements'].keys():
     
@@ -230,23 +260,23 @@ def make_default_config() -> dict:
             'elements': {'ch0-pos/ch1-neg': {'color': 'purple',
                                              'collect': True,
                                              'laser_function': 'RoboLPC',
-                                             'tube_id': 1},
+                                             'tube_id': 'Tube 1'},
                          'ch0-pos/ch1-pos': {'color': 'green',
                                              'collect': True,
                                              'laser_function': 'RoboLPC',
-                                             'tube_id': 2},
+                                             'tube_id': 'Tube 2'},
                          'ch0-pos/ch1-amb': {'color': 'yellow',
                                              'collect': False,
                                              'laser_function': '',
-                                             'tube_id': 3},
+                                             'tube_id': 'Tube 3'},
                          'ch1-pos/ch0-neg': {'color': 'cyan',
                                              'collect': False,
                                              'laser_function': '',
-                                             'tube_id': 4},
+                                             'tube_id': 'Tube 4'},
                          'ch1-pos/ch0-amb': {'color': 'pink',
                                              'collect': False,
                                              'laser_function': '',
-                                             'tube_id': 5}}}
+                                             'tube_id': 'Tube 5'}}}
   
   with open(path, 'w') as f:
     

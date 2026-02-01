@@ -10,7 +10,7 @@ import json
 import importlib.resources
 from matplotlib.colors import to_rgba
 from pathlib import Path
-from qtpy.QtWidgets import QPushButton, QWidget, QLabel, QVBoxLayout, QFileDialog, QDoubleSpinBox, QHBoxLayout, QApplication, QSizePolicy, QStyle
+from qtpy.QtWidgets import QPushButton, QWidget, QLabel, QVBoxLayout, QFileDialog, QSpinBox, QDoubleSpinBox, QHBoxLayout, QApplication, QSizePolicy, QStyle, QComboBox
 from qtpy.QtCore import Signal, QObject, QThread, QTimer, Qt
 from enum import Enum
 from csbdeep.utils import normalize
@@ -90,11 +90,11 @@ class ParamValueBox(QWidget):
   valueChanged = Signal(float)
   
   def __init__(self, 
-               label, 
-               default=0,
-               min_val=0, 
-               max_val=0, 
-               decimals=0, 
+               label: str, 
+               default: int | float = 0,
+               min_val: int | float = 0, 
+               max_val: int | float = 0, 
+               decimals: int = 0, 
                parent=None):
     
     super().__init__(parent)
@@ -116,12 +116,92 @@ class ParamValueBox(QWidget):
 
     self._spin.valueChanged.connect(self.valueChanged.emit)
 
-  def value(self) -> float:
-    return self._spin.value()
+# %% ElementConfigBox() ----
+
+class ElementConfigBox(QWidget):
+  
+  valueChanged = Signal(dict)  
+  
+  def __init__(self,
+               label: str,
+               n_collect: int = 0,
+               min_n_collect: int = 0,
+               max_n_collect: int = 1000,
+               tube_id: str = '',
+               tube_options: list[str] = configuration.list_tube_ids(),
+               laser_function: str = '',
+               laser_options: list[str] = configuration.list_laser_functions(),
+               parent=None):
+    
+    super().__init__(parent)
+    
+    # general layout
+    main_layout = QVBoxLayout(self)
+    main_layout.setContentsMargins(0, 0, 0, 0)
+    main_layout.setSpacing(4)
+    
+    title = QLabel(label)
+    title.setStyleSheet('font-weight: bold')
+    main_layout.addWidget(title)
+    
+    # n cells
+    row1 = QHBoxLayout()
+    row1.addWidget(QLabel('n collect'))
+    
+    self.spin_n = QSpinBox()
+    self.spin_n.setRange(min_n_collect, max_n_collect)
+    self.spin_n.setValue(n_collect)
+    row1.addWidget(self.spin_n)
+    
+    main_layout.addLayout(row1)
+    
+    # tube ID
+    row2 = QHBoxLayout()
+    row2.addWidget(QLabel('tube ID'))
+    
+    self.combo_tube = QComboBox()
+    self.combo_tube.addItems(tube_options)
+    self.combo_tube.setCurrentText(tube_id)
+    row2.addWidget(self.combo_tube)
+    
+    main_layout.addLayout(row2)
+    
+    # laser function
+    row3 = QHBoxLayout()
+    row3.addWidget(QLabel('laser function')) 
+    
+    self.combo_laser = QComboBox()
+    self.combo_laser.addItems(laser_options)
+    self.combo_laser.setCurrentText(laser_function)
+    row3.addWidget(self.combo_laser)
+
+    main_layout.addLayout(row3)
+
+    # signals
+    self.spin_n.valueChanged.connect(self.emit_value)
+    self.combo_tube.currentTextChanged.connect(self.emit_value)
+    self.combo_laser.currentTextChanged.connect(self.emit_value)
+    
+  # methods
+  def value(self) -> dict:
+    
+    collect = True if self.spin_n.value() > 0 else False
+    
+    output = {'collect': collect,
+              'n_collect': self.spin_n.value(),
+              'tube_id': self.combo_tube.currentText(),
+              'laser_function': self.combo_laser.currentText()}
+    
+    return output
+
+  def emit_value(self):
+    
+    self.valueChanged.emit(self.value())
 
 # %% MessageLevel() ----
 
 class MessageLevel(Enum):
+  
   NONE = None
   INFO = QStyle.SP_MessageBoxInformation
   BUSY = QStyle.SP_BrowserReload  
@@ -162,16 +242,11 @@ class PluginManager(QWidget):
               'btn_filter_overlap',
               'box_min_pct_ovl_ch0_by_ch1',
               'box_min_pct_ovl_ch1_by_ch0',
-              'box_n_ch0pos_ch1neg',
-              'box_n_ch0pos_ch1pos',
-              'box_n_ch0pos_ch1amb',
-              'box_n_ch1pos_ch0neg',
-              'box_n_ch1pos_ch0amb',
-              'box_tube_ch0pos_ch1neg',
-              'box_tube_ch0pos_ch1pos',
-              'box_tube_ch0pos_ch1amb',
-              'box_tube_ch1pos_ch0neg',
-              'box_tube_ch1pos_ch0amb',
+              'box_elem_ch0pos_ch1neg',
+              'box_elem_ch0pos_ch1pos',
+              'box_elem_ch0pos_ch1amb',
+              'box_elem_ch1pos_ch0neg',
+              'box_elem_ch1pos_ch0amb',
               'btn_save']:
       
       setattr(self, i, None)
@@ -215,16 +290,6 @@ class PluginManager(QWidget):
     self.setLayout(self.layout) 
     self.setMinimumWidth(300)
     self.setMaximumWidth(1000)   
-  
-  # def showEvent(self, event):
-  #       # Called when the widget becomes visible on screen
-  #       super().showEvent(event)
-  #       ready_path = os.environ.get("NAPARI_BRUCE_READY_FILE")
-  #       if ready_path:
-  #           try:
-  #               Path(ready_path).touch()
-  #           except Exception:
-  #               pass
                 
   # Define methods    
   def set_message(self, text: str, level: MessageLevel = MessageLevel.NONE):
@@ -267,16 +332,11 @@ class PluginManager(QWidget):
               'btn_filter_overlap',
               'box_min_pct_ovl_ch0_by_ch1',
               'box_min_pct_ovl_ch1_by_ch0',
-              'box_n_ch0pos_ch1neg',
-              'box_n_ch0pos_ch1pos',
-              'box_n_ch0pos_ch1amb',
-              'box_n_ch1pos_ch0neg',
-              'box_n_ch1pos_ch0amb',
-              'box_tube_ch0pos_ch1neg',
-              'box_tube_ch0pos_ch1pos',
-              'box_tube_ch0pos_ch1amb',
-              'box_tube_ch1pos_ch0neg',
-              'box_tube_ch1pos_ch0amb',
+              'box_elem_ch0pos_ch1neg',
+              'box_elem_ch0pos_ch1pos',
+              'box_elem_ch0pos_ch1amb',
+              'box_elem_ch1pos_ch0neg',
+              'box_elem_ch1pos_ch0amb',
               'btn_save']:
       
       j = getattr(self, i, None)
@@ -305,9 +365,9 @@ class PluginManager(QWidget):
     # Delay viewer reset
     QApplication.processEvents()
     
-    QTimer.singleShot(50, self._reset_viewer_to_defaults)
+    QTimer.singleShot(50, self.reset_viewer_to_defaults)
   
-  def _reset_viewer_to_defaults(self):
+  def reset_viewer_to_defaults(self):
     
     # Clear all layers 
     self.viewer.layers.clear()
@@ -409,13 +469,13 @@ class PluginManager(QWidget):
     self._load_worker_thread.finished.connect(self._load_worker_thread.deleteLater)
 
     # Reset worker-related attributes to default values on finished 
-    def _reset_attrs():
+    def reset_attrs():
       
       for i in ['_load_worker_thread', '_load_worker']:
         
         setattr(self, i, None)
         
-    self._load_worker_thread.finished.connect(_reset_attrs)
+    self._load_worker_thread.finished.connect(reset_attrs)
 
     # Start worker thread
     self._load_worker_thread.start()
@@ -445,6 +505,8 @@ class PluginManager(QWidget):
     if not (ch0_nm_ok and ch1_nm_ok):
             
       self._channel_mismatch = True
+      self.config['channels'][0]['name'] = metadata['channels'][0]['name']
+      self.config['channels'][1]['name'] = metadata['channels'][1]['name']
               
     self.set_message('Updating viewer...', 
                      MessageLevel.BUSY)
@@ -459,9 +521,9 @@ class PluginManager(QWidget):
     # Delay viewer update
     QApplication.processEvents()
     
-    QTimer.singleShot(50, self._update_viewer_on_load_finished)
+    QTimer.singleShot(50, self.update_viewer_on_load_finished)
     
-  def _update_viewer_on_load_finished(self):
+  def update_viewer_on_load_finished(self):
           
     # Add normalized images to viewer
     for i in self.ch_names.values():
@@ -514,14 +576,14 @@ class PluginManager(QWidget):
     self.box_min_area_ch0 = ParamValueBox(label=f'min area (\u00B5m\u00B2) {self.ch_names[0]}', 
                                           default=self.config['channels'][0]['min_area_um2'],
                                           min_val=0.0, 
-                                          max_val=10000.0)
-    self.box_min_area_ch0.valueChanged.connect(self.on_min_area_ch0_changed)
+                                          max_val=10000.0)    
+    self.box_min_area_ch0.valueChanged.connect(lambda x: self.on_min_area_changed(0, x))
       
     self.box_min_area_ch1 = ParamValueBox(label=f'min area (\u00B5m\u00B2) {self.ch_names[1]}', 
                                           default=self.config['channels'][1]['min_area_um2'],
                                           min_val=0.0, 
                                           max_val=10000.0)
-    self.box_min_area_ch1.valueChanged.connect(self.on_min_area_ch1_changed)
+    self.box_min_area_ch0.valueChanged.connect(lambda x: self.on_min_area_changed(1, x))
       
     for i, j in zip([0, 1], 
                     [self.box_min_area_ch0, 
@@ -625,13 +687,13 @@ class PluginManager(QWidget):
     self._predict_worker_thread.finished.connect(self._predict_worker_thread.deleteLater)
 
     # Reset worker-related attributes to default values on finished 
-    def _reset_attrs():
+    def reset_attrs():
       
       for i in ['_predict_worker_thread', '_predict_worker']:
         
         setattr(self, i, None)
         
-    self._predict_worker_thread.finished.connect(_reset_attrs)
+    self._predict_worker_thread.finished.connect(reset_attrs)
 
     # Start worker thread
     self._predict_worker_thread.start()
@@ -709,13 +771,13 @@ class PluginManager(QWidget):
     self._filter_size_worker_thread.finished.connect(self._filter_size_worker_thread.deleteLater)
 
     # Reset worker-related attributes to default values on finished 
-    def _reset_attrs():
+    def reset_attrs():
       
       for i in ['_filter_size_worker_thread', '_filter_size_worker']:
         
         setattr(self, i, None)
         
-    self._filter_size_worker_thread.finished.connect(_reset_attrs)
+    self._filter_size_worker_thread.finished.connect(reset_attrs)
 
     # Start worker thread
     self._filter_size_worker_thread.start()
@@ -747,9 +809,9 @@ class PluginManager(QWidget):
     
     QApplication.processEvents()
     
-    QTimer.singleShot(50, self._update_viewer_on_filter_size_finished)
+    QTimer.singleShot(50, self.update_viewer_on_filter_size_finished)
   
-  def _update_viewer_on_filter_size_finished(self):
+  def update_viewer_on_filter_size_finished(self):
     
     # Update labels and shapes layers 
     for v in self.ch_names.values():
@@ -838,13 +900,13 @@ class PluginManager(QWidget):
     self._apply_edits_worker_thread.finished.connect(self._apply_edits_worker_thread.deleteLater)
 
     # Reset worker-related attributes to default values on finished 
-    def _reset_attrs():
+    def reset_attrs():
       
       for i in ['_apply_edits_worker_thread', '_apply_edits_worker']:
         
         setattr(self, i, None)
         
-    self._apply_edits_worker_thread.finished.connect(_reset_attrs)
+    self._apply_edits_worker_thread.finished.connect(reset_attrs)
 
     # Start worker thread
     self._apply_edits_worker_thread.start()
@@ -876,9 +938,9 @@ class PluginManager(QWidget):
     
     QApplication.processEvents()
     
-    QTimer.singleShot(50, self._update_viewer_on_apply_edits_finished)
+    QTimer.singleShot(50, self.update_viewer_on_apply_edits_finished)
   
-  def _update_viewer_on_apply_edits_finished(self):
+  def update_viewer_on_apply_edits_finished(self):
     
     # Remove shapes and labels layers 
     for v in self.ch_names.values():
@@ -901,14 +963,14 @@ class PluginManager(QWidget):
                                                     default=self.config['min_pct_ovl_ch0_by_ch1'],
                                                     min_val=0.0, 
                                                     max_val=100.0)
-    self.box_min_pct_ovl_ch0_by_ch1.valueChanged.connect(self.on_min_pct_ovl_ch0_by_ch1_changed)
+    self.box_min_pct_ovl_ch0_by_ch1.valueChanged.connect(lambda x: self.on_min_pct_ovl_changed('min_pct_ovl_ch0_by_ch1', x))
     
     self.box_min_pct_ovl_ch1_by_ch0 = ParamValueBox(label=f'min % overlap {self.ch_names[1]} / {self.ch_names[0]}', 
                                                     default=self.config['min_pct_ovl_ch1_by_ch0'],
                                                     min_val=0.0, 
                                                     max_val=100.0)
-    self.box_min_pct_ovl_ch1_by_ch0.valueChanged.connect(self.on_min_pct_ovl_ch1_by_ch0_changed)
-    
+    self.box_min_pct_ovl_ch1_by_ch0.valueChanged.connect(lambda x: self.on_min_pct_ovl_changed('min_pct_ovl_ch1_by_ch0', x))
+
     self.btn_overlap = QPushButton('Find overlaps')
     self.btn_overlap.clicked.connect(self.on_overlap_clicked)
     
@@ -985,13 +1047,13 @@ class PluginManager(QWidget):
     self._overlap_worker_thread.finished.connect(self._overlap_worker_thread.deleteLater)
 
     # Reset worker-related attributes to default values on finished 
-    def _reset_attrs():
+    def reset_attrs():
       
       for i in ['_overlap_worker_thread', '_overlap_worker']:
         
         setattr(self, i, None)
         
-    self._overlap_worker_thread.finished.connect(_reset_attrs)
+    self._overlap_worker_thread.finished.connect(reset_attrs)
 
     # Start worker thread
     self._overlap_worker_thread.start()
@@ -1023,9 +1085,9 @@ class PluginManager(QWidget):
     
     QApplication.processEvents()
     
-    QTimer.singleShot(50, self._update_viewer_on_overlap_finished)
+    QTimer.singleShot(50, self.update_viewer_on_overlap_finished)
   
-  def _update_viewer_on_overlap_finished(self):
+  def update_viewer_on_overlap_finished(self):
     
     # Update merge image layer
     self.layers['merge'].visible = False
@@ -1034,113 +1096,63 @@ class PluginManager(QWidget):
     
     self.layers['merge'].visible = True
     
-    # Add 'Adjust overlap filter' button, 'overlap count' boxes and 'Save results' button to viewer if overlaps are returned for the first time
+    # Add 'Adjust overlap filter' button, 'element' boxes and 'Save results' button to viewer if overlaps are returned for the first time
     if not self._filter_overlap_requested:
       
       self.btn_filter_overlap = QPushButton('Adjust overlap filter')
       self.btn_filter_overlap.clicked.connect(self.on_filter_overlap_clicked)
       
-      # ch0-pos / ch1-neg
-      self.box_n_ch0pos_ch1neg = ParamValueBox(label=f'n {self.ch_names[0]}\u207A / {self.ch_names[1]}\u207B')
-      
-      self.box_n_ch0pos_ch1neg.valueChanged.connect(self.on_n_ch0pos_ch1neg_changed)
-      
-      self.box_tube_ch0pos_ch1neg = ParamValueBox(label=f'tube ID {self.ch_names[0]}\u207A / {self.ch_names[1]}\u207B',
-                                                  default=self.config['elements']['ch0-pos/ch1-neg']['tube_id'],
-                                                  min_val=1,
-                                                  max_val=8)
-      
-      self.box_tube_ch0pos_ch1neg.valueChanged.connect(self.on_tube_ch0pos_ch1neg_changed)
-      
-      # ch0-pos / ch1-pos
-      self.box_n_ch0pos_ch1pos = ParamValueBox(label=f'n {self.ch_names[0]}\u207A / {self.ch_names[1]}\u207A')
-      
-      self.box_n_ch0pos_ch1neg.valueChanged.connect(self.on_n_ch0pos_ch1neg_changed)
-      
-      self.box_tube_ch0pos_ch1pos = ParamValueBox(label=f'tube ID {self.ch_names[0]}\u207A / {self.ch_names[1]}\u207A',
-                                                  default=self.config['elements']['ch0-pos/ch1-pos']['tube_id'],
-                                                  min_val=1,
-                                                  max_val=8)
-      
-      self.box_tube_ch0pos_ch1neg.valueChanged.connect(self.on_tube_ch0pos_ch1neg_changed)
-      
-      # ch0-pos / ch1-amb
-      self.box_n_ch0pos_ch1amb = ParamValueBox(label=f'n {self.ch_names[0]}\u207A / {self.ch_names[1]}-amb')
-      
-      self.box_n_ch0pos_ch1amb.valueChanged.connect(self.on_n_ch0pos_ch1amb_changed)
-      
-      self.box_tube_ch0pos_ch1amb = ParamValueBox(label=f'tube ID {self.ch_names[0]}\u207A / {self.ch_names[1]}-amb',
-                                                  default=self.config['elements']['ch0-pos/ch1-amb']['tube_id'],
-                                                  min_val=1,
-                                                  max_val=8)
-      
-      self.box_tube_ch0pos_ch1amb.valueChanged.connect(self.on_tube_ch0pos_ch1amb_changed)
-      
-      # ch1-pos / ch0-neg
-      self.box_n_ch1pos_ch0neg = ParamValueBox(label=f'n {self.ch_names[1]}\u207A / {self.ch_names[0]}\u207B')
-      
-      self.box_n_ch1pos_ch0neg.valueChanged.connect(self.on_n_ch1pos_ch0neg_changed)
-      
-      self.box_tube_ch1pos_ch0neg = ParamValueBox(label=f'tube ID {self.ch_names[1]}\u207A / {self.ch_names[0]}\u207B',
-                                                  default=self.config['elements']['ch1-pos/ch0-neg']['tube_id'],
-                                                  min_val=1,
-                                                  max_val=8)
-      
-      self.box_tube_ch1pos_ch0neg.valueChanged.connect(self.on_tube_ch1pos_ch0neg_changed)
-      
-      # ch1-pos / ch0-amb
-      self.box_n_ch1pos_ch0amb = ParamValueBox(label=f'n {self.ch_names[1]}\u207A / {self.ch_names[0]}-amb')
-      
-      self.box_n_ch1pos_ch0amb.valueChanged.connect(self.on_n_ch1pos_ch0amb_changed)
-      
-      self.box_tube_ch1pos_ch0amb = ParamValueBox(label=f'tube ID {self.ch_names[1]}\u207A / {self.ch_names[0]}-amb',
-                                                  default=self.config['elements']['ch1-pos/ch0-amb']['tube_id'],
-                                                  min_val=1,
-                                                  max_val=8)
-      
-      self.box_tube_ch1pos_ch0amb.valueChanged.connect(self.on_tube_ch1pos_ch0amb_changed)
-
       self.btn_save = QPushButton('Save results')
       self.btn_save.clicked.connect(self.on_save_clicked)
+            
+      self.box_elem_ch0pos_ch1neg = ElementConfigBox(label=f'{self.ch_names[0]}\u207A / {self.ch_names[1]}\u207B')
       
-      for i, j in zip([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13],
+      self.box_elem_ch0pos_ch1neg.valueChanged.connect(lambda x: self.on_elem_params_changed('ch0-pos/ch1-neg', x))
+      
+      self.box_elem_ch0pos_ch1pos = ElementConfigBox(label=f'{self.ch_names[0]}\u207A / {self.ch_names[1]}\u207A')
+      
+      self.box_elem_ch0pos_ch1pos.valueChanged.connect(lambda x: self.on_elem_params_changed('ch0-pos/ch1-pos', x))
+      
+      self.box_elem_ch0pos_ch1amb = ElementConfigBox(label=f'{self.ch_names[0]}\u207A / {self.ch_names[1]}-amb')
+      
+      self.box_elem_ch0pos_ch1amb.valueChanged.connect(lambda x: self.on_elem_params_changed('ch0-pos/ch1-amb', x))
+      
+      self.box_elem_ch1pos_ch0neg = ElementConfigBox(label=f'{self.ch_names[1]}\u207A / {self.ch_names[0]}\u207B')
+      
+      self.box_elem_ch1pos_ch0neg.valueChanged.connect(lambda x: self.on_elem_params_changed('ch1-pos/ch0-neg', x))
+      
+      self.box_elem_ch1pos_ch0amb = ElementConfigBox(label=f'{self.ch_names[1]}\u207A / {self.ch_names[0]}-amb')
+      
+      self.box_elem_ch1pos_ch0amb.valueChanged.connect(lambda x: self.on_elem_params_changed('ch1-pos/ch0-amb', x))
+        
+      for i, j in zip([2, 3, 4, 5, 6, 7, 8],
                       [self.btn_filter_overlap,
-                       self.box_n_ch0pos_ch1neg,
-                       self.box_n_ch0pos_ch1pos,
-                       self.box_n_ch0pos_ch1amb,
-                       self.box_n_ch1pos_ch0neg,
-                       self.box_n_ch1pos_ch0amb,
-                       self.box_tube_ch0pos_ch1neg,
-                       self.box_tube_ch0pos_ch1pos,
-                       self.box_tube_ch0pos_ch1amb,
-                       self.box_tube_ch1pos_ch0neg,
-                       self.box_tube_ch1pos_ch0amb,
+                       self.box_elem_ch0pos_ch1neg,
+                       self.box_elem_ch0pos_ch1pos,
+                       self.box_elem_ch0pos_ch1amb,
+                       self.box_elem_ch1pos_ch0neg,
+                       self.box_elem_ch1pos_ch0amb,
                        self.btn_save]):
         
         self.layout.insertWidget(i, j)
         
-    # Re-enable 'min % ovl' and 'overlap count' boxes, 'Adjust overlap filter', 'Save results' and 'Clear' buttons
-    # => 'Adjust overlap filter' button, 'overlap count' boxes and 'Save results' button do not exist yet if overlaps are returned for the first time 
+    # Re-enable 'min % ovl' and 'element' boxes, 'Adjust overlap filter', 'Save results' and 'Clear' buttons
+    # => 'Adjust overlap filter' button, 'element' boxes and 'Save results' button do not exist yet if overlaps are returned for the first time 
     for i in [self.box_min_pct_ovl_ch0_by_ch1,
               self.box_min_pct_ovl_ch1_by_ch0, 
               self.btn_filter_overlap,
-              self.box_n_ch0pos_ch1neg,
-              self.box_n_ch0pos_ch1pos,
-              self.box_n_ch0pos_ch1amb,
-              self.box_n_ch1pos_ch0neg,
-              self.box_n_ch1pos_ch0amb,
-              self.box_tube_ch0pos_ch1neg,
-              self.box_tube_ch0pos_ch1pos,
-              self.box_tube_ch0pos_ch1amb,
-              self.box_tube_ch1pos_ch0neg,
-              self.box_tube_ch1pos_ch0amb,
+              self.box_elem_ch0pos_ch1neg,
+              self.box_elem_ch0pos_ch1pos,
+              self.box_elem_ch0pos_ch1amb,
+              self.box_elem_ch1pos_ch0neg,
+              self.box_elem_ch1pos_ch0amb,
               self.btn_save,
               self.btn_clear]:
       
       i.setEnabled(True)
     
-    # Update 'overlap count' boxes 
-    self._update_overlap_count_boxes()
+    # Update 'element' boxes 
+    self.update_elem_boxes()
     
     # Message cell status summary 
     summary = f'''Count summary
@@ -1187,119 +1199,61 @@ class PluginManager(QWidget):
     self.set_message(f"Results saved at:\n{self.config['out_dir_path']}\n\nIn subfolder:\n{self.metadata['img_nm']}",
                      MessageLevel.SAVE)
 
-  def on_min_area_ch0_changed(self, value):
+  def update_elem_boxes(self):
+    
+    primary_channel_id = [0, 0, 0, 1, 1]
+    
+    secondary_channel_status = ['neg', 'pos', 'amb', 'neg', 'amb']
+    
+    population = ['ch0-pos/ch1-neg', 
+                  'ch0-pos/ch1-pos', 
+                  'ch0-pos/ch1-amb', 
+                  'ch1-pos/ch0-neg', 
+                  'ch1-pos/ch0-amb']
 
-    self.config['channels'][0]['min_area_um2'] = float(value)
+    box = [self.box_elem_ch0pos_ch1neg,
+           self.box_elem_ch0pos_ch1pos,
+           self.box_elem_ch0pos_ch1amb,
+           self.box_elem_ch1pos_ch0neg,
+           self.box_elem_ch1pos_ch0amb]
     
-  def on_min_area_ch1_changed(self, value):
-
-    self.config['channels'][1]['min_area_um2'] = float(value)
-  
-  def on_min_pct_ovl_ch0_by_ch1_changed(self, value):
-
-    self.config['min_pct_ovl_ch0_by_ch1'] = float(value)
-    
-  def on_min_pct_ovl_ch1_by_ch0_changed(self, value):
-
-    self.config['min_pct_ovl_ch1_by_ch0'] = float(value)
-  
-  def _update_overlap_count_boxes(self):
-    
-    n_ch0pos_ch1neg = self.data[self.ch_names[0]]['summary']['neg'] 
-    n_ch0pos_ch1neg_def = n_ch0pos_ch1neg if self.config['elements']['ch0-pos/ch1-neg']['collect'] is True else 0
-    
-    n_ch0pos_ch1pos = self.data[self.ch_names[0]]['summary']['pos']
-    n_ch0pos_ch1pos_def = n_ch0pos_ch1pos if self.config['elements']['ch0-pos/ch1-pos']['collect'] is True else 0
-    
-    n_ch0pos_ch1amb = self.data[self.ch_names[0]]['summary']['amb'] 
-    n_ch0pos_ch1amb_def = n_ch0pos_ch1amb if self.config['elements']['ch0-pos/ch1-amb']['collect'] is True else 0
-    
-    n_ch1pos_ch0neg = self.data[self.ch_names[1]]['summary']['neg'] 
-    n_ch1pos_ch0neg_def = n_ch1pos_ch0neg if self.config['elements']['ch1-pos/ch0-neg']['collect'] is True else 0
-
-    n_ch1pos_ch0amb = self.data[self.ch_names[1]]['summary']['amb'] 
-    n_ch1pos_ch0amb_def = n_ch1pos_ch0amb if self.config['elements']['ch1-pos/ch0-amb']['collect'] is True else 0
-
-    # update ch0-pos/ch1-neg box
-    if self.box_n_ch0pos_ch1neg is not None:
-      spin = self.box_n_ch0pos_ch1neg._spin
-      spin.blockSignals(True)
-      spin.setMaximum(n_ch0pos_ch1neg)
-      spin.setValue(n_ch0pos_ch1neg_def)
-      spin.blockSignals(False)
-
-    # update ch0-pos/ch1-pos box
-    if self.box_n_ch0pos_ch1pos is not None:
-      spin = self.box_n_ch0pos_ch1pos._spin
-      spin.blockSignals(True)
-      spin.setMaximum(n_ch0pos_ch1pos)
-      spin.setValue(n_ch0pos_ch1pos_def)
-      spin.blockSignals(False)
-    
-    # update ch0-pos/ch1-amb box
-    if self.box_n_ch0pos_ch1amb is not None:
-      spin = self.box_n_ch0pos_ch1amb._spin
-      spin.blockSignals(True)
-      spin.setMaximum(n_ch0pos_ch1amb)
-      spin.setValue(n_ch0pos_ch1amb_def)
-      spin.blockSignals(False)
-    
-    # update ch1-pos/ch0-neg box
-    if self.box_n_ch1pos_ch0neg is not None:
-      spin = self.box_n_ch1pos_ch0neg._spin
-      spin.blockSignals(True)
-      spin.setMaximum(n_ch1pos_ch0neg)
-      spin.setValue(n_ch1pos_ch0neg_def)
-      spin.blockSignals(False)
+    for i, j, k, l in zip(primary_channel_id, secondary_channel_status, population, box):
       
-    # update ch1-pos/ch0-amb box
-    if self.box_n_ch1pos_ch0amb is not None:
-      spin = self.box_n_ch1pos_ch0amb._spin
-      spin.blockSignals(True)
-      spin.setMaximum(n_ch1pos_ch0amb)
-      spin.setValue(n_ch1pos_ch0amb_def)
-      spin.blockSignals(False)
+      max_n_collect = self.data[self.ch_names[i]]['summary'][j] 
+      n_collect = max_n_collect if self.config['elements'][k]['collect'] is True else 0
+      tube_id = self.config['elements'][k]['tube_id']
+      laser_function = self.config['elements'][k]['laser_function']
+      
+      if l is not None:
+        
+        spin_n = l.spin_n
+        spin_n.blockSignals(True)
+        spin_n.setMaximum(max_n_collect)
+        spin_n.setValue(n_collect)
+        spin_n.blockSignals(False)
+        
+        combo_tube = l.combo_tube
+        combo_tube.blockSignals(True)
+        combo_tube.setCurrentText(tube_id)
+        combo_tube.blockSignals(False)
+        
+        combo_laser = l.combo_laser
+        combo_laser.blockSignals(True)
+        combo_laser.setCurrentText(laser_function)
+        combo_laser.blockSignals(False)
               
-  def on_n_ch0pos_ch1neg_changed(self, value):
-        
-    self.config['elements']['ch0-pos/ch1-neg']['n_collect'] = float(value)
-  
-  def on_tube_ch0pos_ch1neg_changed(self, value):
-    
-    self.config['elements']['ch0-pos/ch1-neg']['tube_id'] = float(value)
-  
-  def on_n_ch0pos_ch1pos_changed(self, value):
-        
-    self.config['elements']['ch0-pos/ch1-pos']['n_collect'] = float(value)
-  
-  def on_tube_ch0pos_ch1pos_changed(self, value):
-    
-    self.config['elements']['ch0-pos/ch1-pos']['tube_id'] = float(value)
-  
-  def on_n_ch0pos_ch1amb_changed(self, value):
-        
-    self.config['elements']['ch0-pos/ch1-amb']['n_collect'] = float(value)
-  
-  def on_tube_ch0pos_ch1amb_changed(self, value):
-    
-    self.config['elements']['ch0-pos/ch1-amb']['tube_id'] = float(value)
-  
-  def on_n_ch1pos_ch0neg_changed(self, value):
-        
-    self.config['elements']['ch1-pos/ch0-neg']['n_collect'] = float(value)
-  
-  def on_tube_ch1pos_ch0neg_changed(self, value):
-    
-    self.config['elements']['ch1-pos/ch0-neg']['tube_id'] = float(value)
-    
-  def on_n_ch1pos_ch0amb_changed(self, value):
-        
-    self.config['elements']['ch1-pos/ch0-amb']['n_collect'] = float(value)
-  
-  def on_tube_ch1pos_ch0amb_changed(self, value):
-    
-    self.config['elements']['ch1-pos/ch0-amb']['tube_id'] = float(value)
+  def on_min_area_changed(self, key: int, value: float):
 
+    self.config['channels'][key]['min_area_um2'] = float(value)
+    
+  def on_min_pct_ovl_changed(self, key: str, value):
+
+    self.config[key] = float(value)
+    
+  def on_elem_params_changed(self, key: str, values: dict):
+    
+    self.config['elements'][key].update(values)
+    
 # %% LoadWorker() ----
 
 class LoadWorker(QObject):
