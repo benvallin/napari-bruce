@@ -267,15 +267,15 @@ def make_default_config() -> dict:
                                              'tube_id': 'Tube 2'},
                          'ch0-pos/ch1-amb': {'color': 'yellow',
                                              'collect': False,
-                                             'laser_function': '',
+                                             'laser_function': 'RoboLPC',
                                              'tube_id': 'Tube 3'},
                          'ch1-pos/ch0-neg': {'color': 'cyan',
                                              'collect': False,
-                                             'laser_function': '',
+                                             'laser_function': 'RoboLPC',
                                              'tube_id': 'Tube 4'},
                          'ch1-pos/ch0-amb': {'color': 'pink',
                                              'collect': False,
-                                             'laser_function': '',
+                                             'laser_function': 'RoboLPC',
                                              'tube_id': 'Tube 5'}}}
   
   with open(path, 'w') as f:

@@ -11,7 +11,7 @@ import cv2
 import pickle
 import ome_types
 import importlib.resources
-from itertools import groupby
+from itertools import groupby, chain
 from typing import Any
 from pathlib import Path
 from datetime import datetime
@@ -48,7 +48,7 @@ def robust_normalization(img: np.ndarray,
 
 # %% msk_to_cnts() ----
 
-def msk_to_cnts(msk: np.ndarray) -> np.ndarray:
+def msk_to_cnts(msk: np.ndarray) -> dict:
   
   """Get contours of submasks in mask.
   
@@ -56,11 +56,11 @@ def msk_to_cnts(msk: np.ndarray) -> np.ndarray:
     msk (numpy.ndarray): mask (0=no cells, 1=first cell, 2=second cell...).
   
   Returns:
-    list: list of submasks contours as pixel coordinates.
+    dict: dict of submasks contours as pixel coordinates for each submask ID.
 
   """
   
-  output = []
+  output = {}
   
   for i in np.unique(msk)[1:]:
     
@@ -76,7 +76,7 @@ def msk_to_cnts(msk: np.ndarray) -> np.ndarray:
       
       if len(c) > 2:
         
-        output.append(c)
+        output[i] = c
       
   return output
 
@@ -450,13 +450,15 @@ def get_submsks1_submsks2_status(msk1: np.ndarray,
 # %% status_dict_to_submsks_and_cnts() ----
 
 def status_dict_to_submsks_and_cnts(msk: np.ndarray, 
-                                    status_dict: dict) -> dict:
+                                    status_dict: dict,
+                                    cnt_dict: dict | None) -> dict:
   
   """Get submasks and contours from main mask and submasks status dict.
   
   Args:
     msk (numpy.ndarray): mask (0=no cells, 1=first cell, 2=second cell...).
     status_dict (dict): submasks status dict produced by get_submsks1_submsks2_status().
+    cnt_dict (dict): dict of precomputed contours for input mask.
   
   Returns:
     dict: dict of submasks and contours for every submask ID in submasks status dict. 
@@ -466,6 +468,20 @@ def status_dict_to_submsks_and_cnts(msk: np.ndarray,
   
   tmp = {}
   
+  if cnt_dict is None:
+    
+    def get_cnt():
+      
+      cnt = msk_to_cnts(msk=submsk)
+      
+      output = {k:cnt[k] for k in ids}
+      
+      return output
+      
+  else:
+    
+    get_cnt = lambda: {k:cnt_dict[k] for k in ids}
+  
   for i in status_dict.keys():
     
     ids = list(status_dict[i].keys())
@@ -474,8 +490,8 @@ def status_dict_to_submsks_and_cnts(msk: np.ndarray,
                       msk,
                       0)
     
-    cnt = msk_to_cnts(msk=submsk)
-    
+    cnt = get_cnt()
+        
     tmp[i] = {'msk': submsk, 'cnt': cnt}
     
   submsks = {k:v['msk'] for k, v in tmp.items()}
@@ -960,19 +976,26 @@ def get_palm_elem(file: str,
 
 def format_elem_cnt(elem_cnt: np.ndarray, 
                     id: int,
-                    color: str = 'red', 
-                    laser_fun: str = 'RoboLPC',
-                    dest_well: str = 'Tube 1',
-                    objective: str = '20X') -> pd.DataFrame:
+                    name: str,
+                    color: str, 
+                    laser_fun: str,
+                    destination: str,
+                    area: float,
+                    comment: str,
+                    objective: str,
+                    ) -> pd.DataFrame:
 
   """Format element contours for PALM RoboSoftware.
   
   Args:
     elem_cnt (numpy.ndarray): element-specific contours as an array of shape (N, 2).
-    id (int): ID to assign to element.
-    color (str): color to assign to element.
-    laser_fun (str): laser function. Should be one of 'Cut', 'JointCut', 'CloseCut', 'LPC', 'LineAutoLPC', 'AutoLPC', 'CloseCut + AutoLPC', 'RoboLPC', or 'CenterRoboLPC'.
-    dest_well (str): destination vessel ID.
+    id (int): element ID.
+    name (str): element name.
+    color (str): element color.
+    laser_fun (str): element laser function.
+    destination (str): element destination.
+    area (float): element area in µm2.
+    comment (str): element comment.
     objective (str): objective used for image acquisition.
   
   Returns:
@@ -984,13 +1007,14 @@ def format_elem_cnt(elem_cnt: np.ndarray,
                          'Color': ['', color],
                          'Thickness': ['', '2'],
                          'No': ['', str(id)],
+                         'Name': ['', name],
                          'Laser function': ['', laser_fun],
                          'CutShot': ['', '0,0'],
-                         'Area': ['', '-'], 
+                         'Area': ['', area], 
                          'Z': ['', '-'], 
-                         'Well': ['', dest_well], 
+                         'Well': ['', destination], 
                          'Objective': ['', objective],
-                         'Comment': ['', '.'],
+                         'Comment': ['', comment],
                          'Coordinates': ['', '']})
     
   cnt = np.apply_along_axis(func1d=lambda x: ','.join(x.astype(str)), 
@@ -1008,7 +1032,7 @@ def format_elem_cnt(elem_cnt: np.ndarray,
   cnt = cnt[~np.all(cnt == '', axis=1)]
   
   cnt = pd.DataFrame(cnt,
-                     columns=['Color', 'Thickness', 'No', 'Laser function', 'CutShot'])
+                     columns=['Color', 'Thickness', 'No', 'Name', 'Laser function'])
   
   cnt = cnt.dropna(how='all')
   
@@ -1026,19 +1050,14 @@ def format_elem_cnt(elem_cnt: np.ndarray,
 
 def make_elem_txt(data_dict: dict, 
                   metadata_dict: dict, 
-                  colors: list = ['red', 'green', 'yellow', 'blue'],
-                  laser_fun: str = 'RoboLPC',
-                  dest_wells: list = ['Tube 1', 'Tube 2', 'Tube 3', 'Tube 4']) -> str:
+                  config_dict: dict) -> str:
 
   """Create string with PALM element properties.
   
   Args:
     data_dict (dict): dict of image data.
     metadata_dict (dict): dict of image metadata.
-    colors (list): list of colors to assign to ch0-pos/ch1-neg, ch0-pos/ch1-pos, ch0-pos/ch1-amb and ch1-pos/ch0-neg, respectively.
-    simple positive, double positive and ambiguous double positive elements, respectively.
-    laser_fun (str): laser function. Should be one of 'Cut', 'JointCut', 'CloseCut', 'LPC', 'LineAutoLPC', 'AutoLPC', 'CloseCut + AutoLPC', 'RoboLPC', or 'CenterRoboLPC'.
-    dest_wells (str): list of destination vessel IDs to assign to ch0-pos/ch1-neg, ch0-pos/ch1-pos, ch0-pos/ch1-amb and ch1-pos/ch0-neg, respectively.
+    config_dict (dict): dict of configuration parameters.
   
   Returns:
     str: string with PALM element properties to be written to .txt file.
@@ -1059,36 +1078,94 @@ Elements :\n
   
   ch0_nm = metadata_dict['channels'][0]['name']
   ch1_nm = metadata_dict['channels'][1]['name']
+  
+  n = [data_dict[k1]['summary'][k2] for k1, k2 in zip([ch0_nm, ch0_nm, ch0_nm, 
+                                                       ch1_nm, ch1_nm],
+                                                      ['neg', 'pos', 'amb', 
+                                                       'neg', 'amb'])]
+  
+  n_collect = [data_dict[k1]['summary'][k2] for k1, k2 in zip([ch0_nm, ch0_nm, ch0_nm, 
+                                                               ch1_nm, ch1_nm],
+                                                              ['neg_collect', 'pos_collect', 'amb_collect', 
+                                                               'neg_collect', 'amb_collect'])]
+  
+  population = [f'{ch0_nm}-pos / {ch1_nm}-neg', f'{ch0_nm}-pos / {ch1_nm}-pos', f'{ch0_nm}-pos / {ch1_nm}-amb',
+                f'{ch1_nm}-pos / {ch0_nm}-neg', f'{ch1_nm}-pos / {ch0_nm}-amb']
+  
+  name = [[f'{i} #{x+1}' for x in range(j)] for i, j in zip(population, n)]
+ 
+  name = list(chain.from_iterable(name))
+  
+  cnt = [[x for x in data_dict[k1]['cnt'][k2].values()] for k1, k2 in zip([ch0_nm, ch0_nm, ch0_nm, 
+                                                                           ch1_nm, ch1_nm], 
+                                                                          ['neg', 'pos', 'amb', 
+                                                                           'neg', 'amb'])]
+  
+  cnt = list(chain.from_iterable(cnt))
+  
+  ids = [[x for x in data_dict[k1]['cnt'][k2].keys()] for k1, k2 in zip([ch0_nm, ch0_nm, ch0_nm, 
+                                                                         ch1_nm, ch1_nm], 
+                                                                        ['neg', 'pos', 'amb', 
+                                                                         'neg', 'amb'])]
+  
+  area = [{k:v for k, v in data_dict[x]['msk_area_um2'].items()} for x in [ch0_nm, ch0_nm, ch0_nm, ch1_nm, ch1_nm]]
+  
+  area = [[x[i] for i in y] for x, y in zip(area, ids)]
+  
+  area = list(chain.from_iterable(area))
+  
+  area = np.round(area, 1)
+  
+  color = [config_dict['elements'][k]['color'] for k in ['ch0-pos/ch1-neg', 'ch0-pos/ch1-pos', 'ch0-pos/ch1-amb', 
+                                                         'ch1-pos/ch0-neg', 'ch1-pos/ch0-amb']]
+  
+  color = [[i for x in range(j)] for i, j in zip(color, n)]
 
-  ch0_cnt_neg = data_dict[ch0_nm]['cnt']['neg']
-  ch0_cnt_pos = data_dict[ch0_nm]['cnt']['pos']
-  ch0_cnt_amb = data_dict[ch0_nm]['cnt']['amb']
-  ch1_cnt_neg = data_dict[ch1_nm]['cnt']['neg']
+  color = list(chain.from_iterable(color))
+  
+  laser_function = [data_dict[k1]['summary'][k2] for k1, k2 in zip([ch0_nm, ch0_nm, ch0_nm, 
+                                                                    ch1_nm, ch1_nm],
+                                                                   ['neg_laser_function', 'pos_laser_function', 'amb_laser_function', 
+                                                                    'neg_laser_function', 'amb_laser_function'])]
+  
+  laser_function = [[i for x in range(j)]+['' for x in range(k-j)] 
+                    for i, j, k in zip(laser_function, n_collect, n)]
+
+  laser_function = list(chain.from_iterable(laser_function))
+
+  tube_id = [data_dict[k1]['summary'][k2] for k1, k2 in zip([ch0_nm, ch0_nm, ch0_nm, 
+                                                             ch1_nm, ch1_nm],
+                                                            ['neg_tube_id', 'pos_tube_id', 'amb_tube_id',
+                                                             'neg_tube_id', 'amb_tube_id'])]
+  
+  tube_id = [[i for x in range(j)]+['' for x in range(k-j)] 
+             for i, j, k in zip(tube_id, n_collect, n)]
+
+  tube_id = list(chain.from_iterable(tube_id))
+  
+  comment = [['COLLECT' for x in range(i)]+['OMIT' for x in range(j-i)] 
+             for i, j in zip(n_collect, n)]
+  
+  comment = list(chain.from_iterable(comment))
   
   output = []
-  total_length = 0
-  start_id = 1
-  for i, j, k in zip([ch0_cnt_neg, ch0_cnt_pos, ch0_cnt_amb, ch1_cnt_neg], colors, dest_wells):
+
+  for i, (j, k, l, m, n, o, p) in enumerate(zip(cnt, name, color, laser_function, tube_id, area, comment)):
+        
+      tmp = scale_elem_cnt(elem_cnt=j, metadata_dict=metadata_dict, to='PALM')
     
-    length = len(i) 
-    
-    if length > 0:
+      tmp = format_elem_cnt(elem_cnt=tmp, 
+                            id=i+1, 
+                            name=k,
+                            color=l, 
+                            laser_fun=m, 
+                            destination=n, 
+                            area=o,
+                            comment=p,
+                            objective=objective) 
       
-      tmp = [scale_elem_cnt(elem_cnt=x, metadata_dict=metadata_dict, to='PALM') for x in i]
-    
-      tmp = [format_elem_cnt(elem_cnt=x, 
-                             id=str(y), 
-                             color=j, 
-                             laser_fun=laser_fun, 
-                             dest_well=k, 
-                             objective=objective) for x, y in zip(tmp, np.arange(start_id, start_id+length+1))]
-      
-      output.extend(tmp)
-      
-      total_length += length
-      
-      start_id = total_length+1
-    
+      output.append(tmp)
+
   output = pd.concat(output)
   
   output = output.to_csv(index=False, sep='\t')
@@ -1096,7 +1173,7 @@ Elements :\n
   output = header + output + '\n\n\n'
   
   return output
-
+  
 # %% choose_stardist_n_tiles() ----
 
 def choose_stardist_n_tiles(img: np.ndarray, max_tile_px: int = 1024) -> tuple[int, int]:

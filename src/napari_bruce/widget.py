@@ -123,7 +123,7 @@ class ElementConfigBox(QWidget):
   valueChanged = Signal(dict)  
   
   def __init__(self,
-               label: str,
+               label: str = '',
                n_collect: int = 0,
                min_n_collect: int = 0,
                max_n_collect: int = 1000,
@@ -140,9 +140,11 @@ class ElementConfigBox(QWidget):
     main_layout.setContentsMargins(0, 0, 0, 0)
     main_layout.setSpacing(4)
     
-    title = QLabel(label)
-    title.setStyleSheet('font-weight: bold')
-    main_layout.addWidget(title)
+    # label
+    self.base_label = label
+    self.label = QLabel(label)
+    self.label.setStyleSheet('font-weight: bold')
+    main_layout.addWidget(self.label)
     
     # n cells
     row1 = QHBoxLayout()
@@ -188,9 +190,8 @@ class ElementConfigBox(QWidget):
     collect = True if self.spin_n.value() > 0 else False
     
     output = {'collect': collect,
-              'n_collect': self.spin_n.value(),
-              'tube_id': self.combo_tube.currentText(),
-              'laser_function': self.combo_laser.currentText()}
+              'laser_function': self.combo_laser.currentText(),
+              'tube_id': self.combo_tube.currentText()}
     
     return output
 
@@ -480,7 +481,7 @@ class PluginManager(QWidget):
     # Start worker thread
     self._load_worker_thread.start()
 
-  def on_load_finished(self, error, error_msg, data, metadata):
+  def on_load_finished(self, error: bool, error_msg: str, data: dict, metadata: dict):
     
     # Stop if LoadWorker failed
     if error is True:
@@ -583,13 +584,16 @@ class PluginManager(QWidget):
                                           default=self.config['channels'][1]['min_area_um2'],
                                           min_val=0.0, 
                                           max_val=10000.0)
-    self.box_min_area_ch0.valueChanged.connect(lambda x: self.on_min_area_changed(1, x))
+    self.box_min_area_ch1.valueChanged.connect(lambda x: self.on_min_area_changed(1, x))
       
     for i, j in zip([0, 1], 
                     [self.box_min_area_ch0, 
                      self.box_min_area_ch1]):
       
       self.layout.insertWidget(i, j)
+    
+    # Reset the view
+    QTimer.singleShot(50, self.viewer.reset_view)
     
     # Stop here if 'Load images' button was clicked
     if not self._predict_requested:
@@ -698,7 +702,7 @@ class PluginManager(QWidget):
     # Start worker thread
     self._predict_worker_thread.start()
     
-  def on_predict_finished(self, error, error_msg, data):
+  def on_predict_finished(self, error: bool, error_msg: str, data: dict):
     
     # Stop if PredictWorker failed
     if error is True:
@@ -782,7 +786,7 @@ class PluginManager(QWidget):
     # Start worker thread
     self._filter_size_worker_thread.start()
     
-  def on_filter_size_finished(self, error, error_msg, data):    
+  def on_filter_size_finished(self, error: bool, error_msg: str, data: dict):    
     
     # Stop if FilterSizeWorker failed
     if error is True:
@@ -881,7 +885,7 @@ class PluginManager(QWidget):
     
     # Create thread and worker
     self._apply_edits_worker_thread = QThread()
-    self._apply_edits_worker = ApplyEditsWorker(self.layers, self.data, self.config, self.ch_names)
+    self._apply_edits_worker = ApplyEditsWorker(self.layers, self.data, self.metadata, self.config, self.ch_names)
     self._apply_edits_worker.moveToThread(self._apply_edits_worker_thread)
     
     # Start worker when thread starts
@@ -911,7 +915,7 @@ class PluginManager(QWidget):
     # Start worker thread
     self._apply_edits_worker_thread.start()
     
-  def on_apply_edits_finished(self, error, error_msg, data):
+  def on_apply_edits_finished(self, error: bool, error_msg: str, data: dict):
     
     # Stop if ApplyEditsWorker failed
     if error is True:
@@ -1058,7 +1062,7 @@ class PluginManager(QWidget):
     # Start worker thread
     self._overlap_worker_thread.start()
     
-  def on_overlap_finished(self, error, error_msg, data):
+  def on_overlap_finished(self, error: bool, error_msg: str, data: dict):
     
     # Stop if OverlapWorker failed
     if error is True:
@@ -1104,24 +1108,27 @@ class PluginManager(QWidget):
       
       self.btn_save = QPushButton('Save results')
       self.btn_save.clicked.connect(self.on_save_clicked)
-            
-      self.box_elem_ch0pos_ch1neg = ElementConfigBox(label=f'{self.ch_names[0]}\u207A / {self.ch_names[1]}\u207B')
+      
+      plus = '\u207A'
+      minus = '\u207B'  
+      
+      self.box_elem_ch0pos_ch1neg = ElementConfigBox(label=f'{self.ch_names[0]}{plus} / {self.ch_names[1]}{minus}')
       
       self.box_elem_ch0pos_ch1neg.valueChanged.connect(lambda x: self.on_elem_params_changed('ch0-pos/ch1-neg', x))
       
-      self.box_elem_ch0pos_ch1pos = ElementConfigBox(label=f'{self.ch_names[0]}\u207A / {self.ch_names[1]}\u207A')
+      self.box_elem_ch0pos_ch1pos = ElementConfigBox(label=f'{self.ch_names[0]}{plus} / {self.ch_names[1]}{plus}')
       
       self.box_elem_ch0pos_ch1pos.valueChanged.connect(lambda x: self.on_elem_params_changed('ch0-pos/ch1-pos', x))
       
-      self.box_elem_ch0pos_ch1amb = ElementConfigBox(label=f'{self.ch_names[0]}\u207A / {self.ch_names[1]}-amb')
+      self.box_elem_ch0pos_ch1amb = ElementConfigBox(label=f'{self.ch_names[0]}{plus} / {self.ch_names[1]}-amb')
       
       self.box_elem_ch0pos_ch1amb.valueChanged.connect(lambda x: self.on_elem_params_changed('ch0-pos/ch1-amb', x))
       
-      self.box_elem_ch1pos_ch0neg = ElementConfigBox(label=f'{self.ch_names[1]}\u207A / {self.ch_names[0]}\u207B')
+      self.box_elem_ch1pos_ch0neg = ElementConfigBox(label=f'{self.ch_names[1]}{plus} / {self.ch_names[0]}{minus}')
       
       self.box_elem_ch1pos_ch0neg.valueChanged.connect(lambda x: self.on_elem_params_changed('ch1-pos/ch0-neg', x))
       
-      self.box_elem_ch1pos_ch0amb = ElementConfigBox(label=f'{self.ch_names[1]}\u207A / {self.ch_names[0]}-amb')
+      self.box_elem_ch1pos_ch0amb = ElementConfigBox(label=f'{self.ch_names[1]}{plus} / {self.ch_names[0]}-amb')
       
       self.box_elem_ch1pos_ch0amb.valueChanged.connect(lambda x: self.on_elem_params_changed('ch1-pos/ch0-amb', x))
         
@@ -1154,24 +1161,13 @@ class PluginManager(QWidget):
     # Update 'element' boxes 
     self.update_elem_boxes()
     
-    # Message cell status summary 
-    summary = f'''Count summary
-    
-    - {self.ch_names[0]}\u207A / {self.ch_names[1]}\u207B ({self.config['elements']['ch0-pos/ch1-neg']['color']}): {self.data[self.ch_names[0]]['summary']['neg']}
-    
-    - {self.ch_names[0]}\u207A / {self.ch_names[1]}\u207A ({self.config['elements']['ch0-pos/ch1-pos']['color']}): {self.data[self.ch_names[0]]['summary']['pos']}
-    
-    - {self.ch_names[0]}\u207A / {self.ch_names[1]}-ambiguous ({self.config['elements']['ch0-pos/ch1-amb']['color']}): {self.data[self.ch_names[0]]['summary']['amb']}
-    
-    - {self.ch_names[1]}\u207A / {self.ch_names[0]}\u207B ({self.config['elements']['ch1-pos/ch0-neg']['color']}): {self.data[self.ch_names[1]]['summary']['neg']}
-    
-    - {self.ch_names[1]}\u207A / {self.ch_names[0]}-ambiguous ({self.config['elements']['ch1-pos/ch0-amb']['color']}): {self.data[self.ch_names[1]]['summary']['amb']}
-    '''
-    
-    self.set_message(summary, 
-                     MessageLevel.INFO)
+    self.set_message("Adjust element list parameters (optional)\n\nPress 'Save results' when finished", 
+                     MessageLevel.CHECK)
   
   def on_save_clicked(self):
+    
+    # Read content of 'element' boxes
+    self.read_elem_boxes()
     
     # Define output directory path 
     out_dir_path = os.path.join(Path(self.config['out_dir_path']).expanduser(), 
@@ -1180,9 +1176,7 @@ class PluginManager(QWidget):
     # Construct element list and write to file 
     self.elem_list = workflow.make_elem_txt(data_dict=self.data, 
                                             metadata_dict=self.metadata,
-                                            colors=['red', 'green', 'yellow', 'blue'],
-                                            laser_fun='RoboLPC',
-                                            dest_wells=['Tube 1', 'Tube 2', 'Tube 3', 'Tube 4'])
+                                            config_dict=self.config)
     
     with open(os.path.join(out_dir_path, 'elem_list.txt'), 'w') as f:
       f.write(self.elem_list)
@@ -1198,7 +1192,19 @@ class PluginManager(QWidget):
     
     self.set_message(f"Results saved at:\n{self.config['out_dir_path']}\n\nIn subfolder:\n{self.metadata['img_nm']}",
                      MessageLevel.SAVE)
+            
+  def on_min_area_changed(self, key: int, value: float):
 
+    self.config['channels'][key]['min_area_um2'] = float(value)
+    
+  def on_min_pct_ovl_changed(self, key: str, value: float):
+
+    self.config[key] = float(value)
+    
+  def on_elem_params_changed(self, key: str, values: dict):
+    
+    self.config['elements'][key].update(values)
+  
   def update_elem_boxes(self):
     
     primary_channel_id = [0, 0, 0, 1, 1]
@@ -1221,10 +1227,16 @@ class PluginManager(QWidget):
       
       max_n_collect = self.data[self.ch_names[i]]['summary'][j] 
       n_collect = max_n_collect if self.config['elements'][k]['collect'] is True else 0
-      tube_id = self.config['elements'][k]['tube_id']
-      laser_function = self.config['elements'][k]['laser_function']
+      laser_function = self.config['elements'][k]['laser_function'] if max_n_collect > 0 else ''
+      tube_id = self.config['elements'][k]['tube_id'] if max_n_collect > 0 else ''
+      color = self.config['elements'][k]['color']
       
       if l is not None:
+        
+        base_label = l.base_label
+        label = l.label
+        label.setText(f'{base_label} ({max_n_collect})')
+        label.setStyleSheet(f'font-weight: bold; color: {color}')
         
         spin_n = l.spin_n
         spin_n.blockSignals(True)
@@ -1232,28 +1244,52 @@ class PluginManager(QWidget):
         spin_n.setValue(n_collect)
         spin_n.blockSignals(False)
         
-        combo_tube = l.combo_tube
-        combo_tube.blockSignals(True)
-        combo_tube.setCurrentText(tube_id)
-        combo_tube.blockSignals(False)
-        
         combo_laser = l.combo_laser
         combo_laser.blockSignals(True)
         combo_laser.setCurrentText(laser_function)
         combo_laser.blockSignals(False)
-              
-  def on_min_area_changed(self, key: int, value: float):
-
-    self.config['channels'][key]['min_area_um2'] = float(value)
+        
+        combo_tube = l.combo_tube
+        combo_tube.blockSignals(True)
+        combo_tube.setCurrentText(tube_id)
+        combo_tube.blockSignals(False)
+  
+  def read_elem_boxes(self):
     
-  def on_min_pct_ovl_changed(self, key: str, value):
-
-    self.config[key] = float(value)
+    primary_channel_id = [0, 0, 0, 1, 1]
     
-  def on_elem_params_changed(self, key: str, values: dict):
+    secondary_channel_status = ['neg', 'pos', 'amb', 'neg', 'amb']
     
-    self.config['elements'][key].update(values)
+    box = [self.box_elem_ch0pos_ch1neg,
+           self.box_elem_ch0pos_ch1pos,
+           self.box_elem_ch0pos_ch1amb,
+           self.box_elem_ch1pos_ch0neg,
+           self.box_elem_ch1pos_ch0amb]
     
+    for i, j, k in zip(primary_channel_id, secondary_channel_status, box):
+      
+      n_collect = k.spin_n.value()
+      laser_function = k.combo_laser.currentText()
+      tube_id = k.combo_tube.currentText()
+      
+      self.data[self.ch_names[i]]['summary'][f'{j}_collect'] = n_collect
+      
+      self.data[self.ch_names[i]]['summary'][f'{j}_laser_function'] = laser_function
+      
+      self.data[self.ch_names[i]]['summary'][f'{j}_tube_id'] = tube_id
+    
+    self.data[self.ch_names[0]]['summary'] = {k:self.data[self.ch_names[0]]['summary'][k]
+                                              for k in ['total', 'neg', 'pos', 'amb', 
+                                                        'neg_collect', 'pos_collect', 'amb_collect',
+                                                        'neg_laser_function', 'pos_laser_function', 'amb_laser_function',
+                                                        'neg_tube_id', 'pos_tube_id', 'amb_tube_id']}
+    
+    self.data[self.ch_names[1]]['summary'] = {k:self.data[self.ch_names[1]]['summary'][k]
+                                              for k in ['total', 'neg', 'pos', 'amb', 
+                                                        'neg_collect', 'amb_collect',
+                                                        'neg_laser_function', 'amb_laser_function',
+                                                        'neg_tube_id', 'amb_tube_id']}
+        
 # %% LoadWorker() ----
 
 class LoadWorker(QObject):
@@ -1340,8 +1376,8 @@ class PredictWorker(QObject):
       # For each channel...    
       for k, v in self.ch_names.items():
       
-        # Run StarDist
-        img = normalize(self.data[v]['norm_img'])
+        # Run StarDist        
+        img = normalize(self.data[v]['img'], 1, 99.8, axis=(0,1)) # Adjust this depending on training parameters
         
         n_tiles = workflow.choose_stardist_n_tiles(img)
       
@@ -1423,6 +1459,7 @@ class ApplyEditsWorker(QObject):
   def __init__(self, 
                layers: object,
                data: object, 
+               metadata: object,
                config: object,
                ch_names: object,
                parent=None):
@@ -1430,12 +1467,15 @@ class ApplyEditsWorker(QObject):
     super().__init__(parent)
     self.layers = layers
     self.data = data
+    self.metadata = metadata
     self.config = config
     self.ch_names = ch_names
     
   def run(self):
     
     try:
+      
+      px_area_um2 = self.metadata['image']['px_area_um2']
       
       # For each channel...
       for k in self.ch_names.values():
@@ -1464,6 +1504,8 @@ class ApplyEditsWorker(QObject):
             if j not in self.data[k]['msk_area'].keys():
             
               self.data[k]['msk_area'][j] = tmp[j]
+              
+              self.data[k]['msk_area_um2'][j] = tmp[j]*px_area_um2 
       
         self.data[k]['filt_cnt_edited'] = workflow.msk_to_cnts(msk=self.data[k]['filt_msk_edited'])
                     
@@ -1491,7 +1533,7 @@ class ApplyEditsWorker(QObject):
                        (int(c1_r*255), int(c1_g*255), int(c1_b*255))]):
       
         merge_norm_img = cv2.drawContours(image=merge_norm_img,
-                                          contours=self.data[i]['filt_cnt_edited'], 
+                                          contours=[x for x in self.data[i]['filt_cnt_edited'].values()], 
                                           contourIdx=-1,
                                           color=j,
                                           thickness=4)
@@ -1553,9 +1595,10 @@ class OverlapWorker(QObject):
         self.data[i]['summary'] = summary
       
         # Extract submasks and contours
-        self.data[i]['submsks'], self.data[i]['cnt']  = workflow.status_dict_to_submsks_and_cnts(
+        self.data[i]['submsks'], self.data[i]['cnt'] = workflow.status_dict_to_submsks_and_cnts(
           msk=self.data[i]['filt_msk_edited'],
-          status_dict=self.data[i][f'{j}_status']
+          status_dict=self.data[i][f'{j}_status'],
+          cnt_dict=self.data[i]['filt_cnt_edited']
           )
     
       # Add status ROIs to merge image      
@@ -1577,7 +1620,7 @@ class OverlapWorker(QObject):
       for i, j in status_colors_ch0.items():
       
         merge_norm_img = cv2.drawContours(image=merge_norm_img,
-                                          contours=self.data[ch0_nm]['cnt'][i], 
+                                          contours=[x for x in self.data[ch0_nm]['cnt'][i].values()], 
                                           contourIdx=-1,
                                           color=j,
                                           thickness=4)
@@ -1585,7 +1628,7 @@ class OverlapWorker(QObject):
       for i, j in status_colors_ch1.items():
         
         merge_norm_img = cv2.drawContours(image=merge_norm_img,
-                                          contours=self.data[ch1_nm]['cnt'][i], 
+                                          contours=[x for x in self.data[ch1_nm]['cnt'][i].values()], 
                                           contourIdx=-1,
                                           color=j,
                                           thickness=4)

@@ -22,7 +22,7 @@ def _is_unicode_supported():
   
   return 'utf' in enc.lower()
 
-def spin_until(condition, message='Waiting…', delay=0.08, timeout=None):
+def spin_until(condition, message='Starting napari-bruce...', delay=0.08, timeout=None):
   
   if not sys.stdout.isatty():
     
@@ -108,19 +108,6 @@ def launch_napari_with_plugin(timeout=60.0):
   
   env['NAPARI_BRUCE_READY_FILE'] = str(ready_file)
 
-  print(r"""
-        '            '
-     /*/    '   '    \*\
-   /**/     |\_/|     \**\
-  *****-----*****-----*****
- |********* Bruce *********|
-  ****/-\***********/-\****
-   |*|   \*********/   |*|
-    \*\    \*****/    /*/
-      \\     \*/     //
-        '     '     '
-        """)
-
   cmd = ['napari', '--with', 'napari-bruce']
 
   try:
@@ -134,12 +121,14 @@ def launch_napari_with_plugin(timeout=60.0):
         return True
       
       return proc.poll() is not None
-
-    ok = spin_until(condition, message='Starting napari-bruce...', timeout=timeout)
+    
+    print('\n')
+    
+    spin_until(condition=condition, timeout=timeout)
     
     if ready_file.exists():
       
-      print('✔ Program is ready\n')
+      print('\u2714 Program is ready\n')
     
     elif proc.poll() is not None:
       
@@ -204,8 +193,7 @@ def cli_main(argv: list[str] | None = None) -> None:
     
     parser.add_argument(
       '-v', '--version',
-      action="version",
-      version=f'napari-bruce {configuration.get_version()}',
+      action='store_true',
       help='show the napari-bruce version and exit',
       )
   
@@ -266,7 +254,26 @@ def cli_main(argv: list[str] | None = None) -> None:
       print(f'Added StarDist model from:\n{args.add_model}')
     
       return
-  
+    
+    if args.version:
+      
+      print(r"""
+        '            '
+     /*/    '   '    \*\
+   /**/     |\_/|     \**\
+  *****-----*****-----*****
+ |********* Bruce *********|
+  ****/-\***********/-\****
+   |*|   \*********/   |*|
+    \*\    \*****/    /*/
+      \\     \*/     //
+        '     '     '
+        """)
+      
+      print(f'napari-bruce {configuration.get_version()}\n')
+      
+      return
+      
     configuration.get_config()
     
     if shutil.which('java') is None:
@@ -280,5 +287,3 @@ def cli_main(argv: list[str] | None = None) -> None:
     print(f'{type(e).__name__}: {e}', file=sys.stderr)
     
     raise SystemExit(1)
-
-# %%
