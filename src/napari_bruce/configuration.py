@@ -257,7 +257,7 @@ def make_default_config() -> dict:
                                'color': 'cyan'}},
             'min_pct_ovl_ch0_by_ch1': 20,
             'min_pct_ovl_ch1_by_ch0': 80,
-            'elements': {'ch0-pos/ch1-neg': {'color': 'purple',
+            'elements': {'ch0-pos/ch1-neg': {'color': 'magenta',
                                              'collect': True,
                                              'laser_function': 'RoboLPC',
                                              'tube_id': 'Tube 1'},
@@ -273,7 +273,7 @@ def make_default_config() -> dict:
                                              'collect': False,
                                              'laser_function': 'RoboLPC',
                                              'tube_id': 'Tube 4'},
-                         'ch1-pos/ch0-amb': {'color': 'pink',
+                         'ch1-pos/ch0-amb': {'color': 'gray',
                                              'collect': False,
                                              'laser_function': 'RoboLPC',
                                              'tube_id': 'Tube 5'}}}

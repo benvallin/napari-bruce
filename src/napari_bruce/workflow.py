@@ -1007,7 +1007,7 @@ def format_elem_cnt(elem_cnt: np.ndarray,
                          'Color': ['', color],
                          'Thickness': ['', '2'],
                          'No': ['', str(id)],
-                         'Name': ['', name],
+                        #  'Name': ['', name],
                          'Laser function': ['', laser_fun],
                          'CutShot': ['', '0,0'],
                          'Area': ['', area], 
@@ -1032,7 +1032,9 @@ def format_elem_cnt(elem_cnt: np.ndarray,
   cnt = cnt[~np.all(cnt == '', axis=1)]
   
   cnt = pd.DataFrame(cnt,
-                     columns=['Color', 'Thickness', 'No', 'Name', 'Laser function'])
+                     columns=['Color', 'Thickness', 'No', 
+                              # 'Name', 
+                              'Laser function', 'CutShot'])
   
   cnt = cnt.dropna(how='all')
   
