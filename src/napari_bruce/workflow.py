@@ -976,7 +976,6 @@ def get_palm_elem(file: str,
 
 def format_elem_cnt(elem_cnt: np.ndarray, 
                     id: int,
-                    name: str,
                     color: str, 
                     laser_fun: str,
                     destination: str,
@@ -990,7 +989,6 @@ def format_elem_cnt(elem_cnt: np.ndarray,
   Args:
     elem_cnt (numpy.ndarray): element-specific contours as an array of shape (N, 2).
     id (int): element ID.
-    name (str): element name.
     color (str): element color.
     laser_fun (str): element laser function.
     destination (str): element destination.
@@ -1007,7 +1005,6 @@ def format_elem_cnt(elem_cnt: np.ndarray,
                          'Color': ['', color],
                          'Thickness': ['', '2'],
                          'No': ['', str(id)],
-                        #  'Name': ['', name],
                          'Laser function': ['', laser_fun],
                          'CutShot': ['', '0,0'],
                          'Area': ['', area], 
@@ -1033,7 +1030,6 @@ def format_elem_cnt(elem_cnt: np.ndarray,
   
   cnt = pd.DataFrame(cnt,
                      columns=['Color', 'Thickness', 'No', 
-                              # 'Name', 
                               'Laser function', 'CutShot'])
   
   cnt = cnt.dropna(how='all')
@@ -1052,7 +1048,11 @@ def format_elem_cnt(elem_cnt: np.ndarray,
 
 def make_elem_txt(data_dict: dict, 
                   metadata_dict: dict, 
-                  config_dict: dict) -> str:
+                  config_dict: dict,
+                  summary_key: str = 'summary',
+                  cnts_key: str = 'cnts',
+                  submsks_area_um2_key: str = 'submsks_area_um2'
+                  ) -> str:
 
   """Create string with PALM element properties.
   
@@ -1081,36 +1081,56 @@ Elements :\n
   ch0_nm = metadata_dict['channels'][0]['name']
   ch1_nm = metadata_dict['channels'][1]['name']
   
-  n = [data_dict[k1]['summary'][k2] for k1, k2 in zip([ch0_nm, ch0_nm, ch0_nm, 
-                                                       ch1_nm, ch1_nm],
-                                                      ['neg', 'pos', 'amb', 
-                                                       'neg', 'amb'])]
+  n = [
+    data_dict[k1][summary_key][k2] 
+    for k1, k2 in zip(
+      [ch0_nm, ch0_nm, ch0_nm, ch1_nm, ch1_nm], 
+      ['neg', 'pos', 'amb', 'neg', 'amb']
+      )
+    ]
   
-  n_collect = [data_dict[k1]['summary'][k2] for k1, k2 in zip([ch0_nm, ch0_nm, ch0_nm, 
-                                                               ch1_nm, ch1_nm],
-                                                              ['neg_collect', 'pos_collect', 'amb_collect', 
-                                                               'neg_collect', 'amb_collect'])]
+  n_collect = [
+    data_dict[k1][summary_key][k2] 
+    for k1, k2 in zip(
+      [ch0_nm, ch0_nm, ch0_nm, ch1_nm, ch1_nm],
+      ['neg_collect', 'pos_collect', 'amb_collect', 'neg_collect', 'amb_collect']
+      )
+    ]
   
-  population = [f'{ch0_nm}-pos / {ch1_nm}-neg', f'{ch0_nm}-pos / {ch1_nm}-pos', f'{ch0_nm}-pos / {ch1_nm}-amb',
-                f'{ch1_nm}-pos / {ch0_nm}-neg', f'{ch1_nm}-pos / {ch0_nm}-amb']
+  # population = [
+  #   f'{ch0_nm}-pos / {ch1_nm}-neg', 
+  #   f'{ch0_nm}-pos / {ch1_nm}-pos', 
+  #   f'{ch0_nm}-pos / {ch1_nm}-amb',
+  #   f'{ch1_nm}-pos / {ch0_nm}-neg', 
+  #   f'{ch1_nm}-pos / {ch0_nm}-amb'
+  #   ]
   
-  name = [[f'{i} #{x+1}' for x in range(j)] for i, j in zip(population, n)]
+  # name = [[f'{i} #{x+1}' for x in range(j)] for i, j in zip(population, n)]
  
-  name = list(chain.from_iterable(name))
+  # name = list(chain.from_iterable(name))
   
-  cnt = [[x for x in data_dict[k1]['cnt'][k2].values()] for k1, k2 in zip([ch0_nm, ch0_nm, ch0_nm, 
-                                                                           ch1_nm, ch1_nm], 
-                                                                          ['neg', 'pos', 'amb', 
-                                                                           'neg', 'amb'])]
+  cnt = [
+    [x for x in data_dict[k1][cnts_key][k2].values()] 
+    for k1, k2 in zip(
+      [ch0_nm, ch0_nm, ch0_nm, ch1_nm, ch1_nm], 
+      ['neg', 'pos', 'amb', 'neg', 'amb']
+      )
+    ]
   
   cnt = list(chain.from_iterable(cnt))
   
-  ids = [[x for x in data_dict[k1]['cnt'][k2].keys()] for k1, k2 in zip([ch0_nm, ch0_nm, ch0_nm, 
-                                                                         ch1_nm, ch1_nm], 
-                                                                        ['neg', 'pos', 'amb', 
-                                                                         'neg', 'amb'])]
+  ids = [
+    [x for x in data_dict[k1][cnts_key][k2].keys()] 
+    for k1, k2 in zip(
+      [ch0_nm, ch0_nm, ch0_nm, ch1_nm, ch1_nm], 
+      ['neg', 'pos', 'amb', 'neg', 'amb']
+      )
+    ]
   
-  area = [{k:v for k, v in data_dict[x]['msk_area_um2'].items()} for x in [ch0_nm, ch0_nm, ch0_nm, ch1_nm, ch1_nm]]
+  area = [
+    {k:v for k, v in data_dict[x][submsks_area_um2_key].items()} 
+    for x in [ch0_nm, ch0_nm, ch0_nm, ch1_nm, ch1_nm]
+    ]
   
   area = [[x[i] for i in y] for x, y in zip(area, ids)]
   
@@ -1118,27 +1138,37 @@ Elements :\n
   
   area = np.round(area, 1)
   
-  color = [config_dict['elements'][k]['color'] for k in ['ch0-pos/ch1-neg', 'ch0-pos/ch1-pos', 'ch0-pos/ch1-amb', 
-                                                         'ch1-pos/ch0-neg', 'ch1-pos/ch0-amb']]
+  color = [
+    config_dict['elements'][k]['color'] 
+    for k in [
+      'ch0-pos/ch1-neg', 'ch0-pos/ch1-pos', 'ch0-pos/ch1-amb', 'ch1-pos/ch0-neg', 'ch1-pos/ch0-amb'
+      ]
+    ]
   
   color = [[i for x in range(j)] for i, j in zip(color, n)]
 
   color = list(chain.from_iterable(color))
   
-  laser_function = [data_dict[k1]['summary'][k2] for k1, k2 in zip([ch0_nm, ch0_nm, ch0_nm, 
-                                                                    ch1_nm, ch1_nm],
-                                                                   ['neg_laser_function', 'pos_laser_function', 'amb_laser_function', 
-                                                                    'neg_laser_function', 'amb_laser_function'])]
+  laser_function = [
+    data_dict[k1][summary_key][k2] 
+    for k1, k2 in zip(
+      [ch0_nm, ch0_nm, ch0_nm,  ch1_nm, ch1_nm],
+      ['neg_laser_function', 'pos_laser_function', 'amb_laser_function', 'neg_laser_function', 'amb_laser_function']
+      )
+    ]
   
   laser_function = [[i for x in range(j)]+['' for x in range(k-j)] 
                     for i, j, k in zip(laser_function, n_collect, n)]
 
   laser_function = list(chain.from_iterable(laser_function))
 
-  tube_id = [data_dict[k1]['summary'][k2] for k1, k2 in zip([ch0_nm, ch0_nm, ch0_nm, 
-                                                             ch1_nm, ch1_nm],
-                                                            ['neg_tube_id', 'pos_tube_id', 'amb_tube_id',
-                                                             'neg_tube_id', 'amb_tube_id'])]
+  tube_id = [
+    data_dict[k1][summary_key][k2] 
+    for k1, k2 in zip(
+      [ch0_nm, ch0_nm, ch0_nm, ch1_nm, ch1_nm],
+      ['neg_tube_id', 'pos_tube_id', 'amb_tube_id', 'neg_tube_id', 'amb_tube_id']
+      )
+    ]
   
   tube_id = [[i for x in range(j)]+['' for x in range(k-j)] 
              for i, j, k in zip(tube_id, n_collect, n)]
@@ -1152,19 +1182,22 @@ Elements :\n
   
   output = []
 
-  for i, (j, k, l, m, n, o, p) in enumerate(zip(cnt, name, color, laser_function, tube_id, area, comment)):
+  for i, (j, k, l, m, n, o) in enumerate(
+    zip(cnt, color, laser_function, tube_id, area, comment)
+    ):
         
       tmp = scale_elem_cnt(elem_cnt=j, metadata_dict=metadata_dict, to='PALM')
     
-      tmp = format_elem_cnt(elem_cnt=tmp, 
-                            id=i+1, 
-                            name=k,
-                            color=l, 
-                            laser_fun=m, 
-                            destination=n, 
-                            area=o,
-                            comment=p,
-                            objective=objective) 
+      tmp = format_elem_cnt(
+        elem_cnt=tmp, 
+        id=i+1, 
+        color=k, 
+        laser_fun=l, 
+        destination=m, 
+        area=n,
+        comment=o,
+        objective=objective
+        ) 
       
       output.append(tmp)
 

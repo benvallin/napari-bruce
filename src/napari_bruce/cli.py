@@ -128,7 +128,7 @@ def launch_napari_with_plugin(timeout=60.0):
     
     if ready_file.exists():
       
-      print('\u2714 Program is ready\n')
+      print('\u2714 Program started\n')
     
     elif proc.poll() is not None:
       
@@ -137,6 +137,10 @@ def launch_napari_with_plugin(timeout=60.0):
     else:
       
       print('Timeout waiting for napari to signal ready')
+    
+    returncode = proc.wait()
+    
+    return returncode
 
   except FileNotFoundError:
     
@@ -225,18 +229,70 @@ def cli_main(argv: list[str] | None = None) -> None:
       print(f'Configuration reset to defaults at:\n{config_path}')
     
       return
-    
+      
     if args.gpu_status:
       
-      with open(os.devnull, 'w') as f, redirect_stdout(f), redirect_stderr(f):
-        
-        from tensorflow.config import list_physical_devices
-        gpus = list_physical_devices('GPU')
+      print('\nChecking TensorFlow / StarDist GPU status...')
       
-      if gpus: 
-        print(f'🟢 StarDist runs on GPU.\nGPU(s) visible to TensorFlow: {gpus}')
-      else:
-        print('🔴 Stardist runs on CPU.')
+      try:
+        
+        os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+        
+        import tensorflow as tf
+      
+      except Exception as e:
+        
+        print(f'\n🔴 TensorFlow could not be imported.\n{type(e).__name__}: {e}\n')
+                
+        return
+      
+      gpus = tf.config.list_physical_devices('GPU')
+      
+      if not gpus:
+        
+        print('\n🔴 No GPU visible to TensorFlow.\nStarDist will run on CPU.\n')
+        
+        return
+
+      print(f'\n🟢 GPU(s) visible to TensorFlow: {gpus}')
+    
+      if sys.platform.startswith('win'):
+      
+        if shutil.which('ptxas.exe') is None:
+        
+          print("\nWARNING: 'ptxas.exe' not found in PATH.")
+          print('CUDA Toolkit is likely not installed correctly; TensorFlow may fall back to CPU.')
+          print("Install CUDA Toolkit 11.2 and add its 'bin' folder to PATH.")
+        
+        else:
+          
+          print('\n🟢 CUDA compiler (ptxas.exe) found in PATH.')
+      
+      try:
+        
+        with tf.device('/GPU:0'):
+          
+          a = tf.random.normal([2000, 2000])
+          b = tf.random.normal([2000, 2000])
+          start = time.time()
+          c = tf.matmul(a, b)
+          _ = c.numpy() 
+          elapsed = time.time() - start
+          
+        print(f'\n🟢 GPU functional test succeeded (matmul time: {elapsed:.3f}s)')
+          
+        if elapsed > 2.0:
+          
+          print('\nGPU test ran but was slow.\nThis may indicate CPU fallback.')
+        
+        else:
+          
+          print('\n🟢 StarDist should run on GPU correctly.\n')
+        
+      except Exception as e:
+        
+        print(f'\n🔴 GPU functional test failed.\n{type(e).__name__}: {e}')
+        print('TensorFlow detected a GPU but cannot execute on it.\nStarDist will fall back to CPU.\n')
       
       return
     
