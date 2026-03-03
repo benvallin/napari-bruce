@@ -16,8 +16,8 @@ from contextlib import redirect_stdout, redirect_stderr
 from csbdeep.utils import normalize
 from qtpy.QtWidgets import QPushButton, QWidget, QLabel, QVBoxLayout, QFileDialog, QSpinBox, QDoubleSpinBox, QHBoxLayout, QApplication, QSizePolicy, QStyle, QComboBox
 from qtpy.QtCore import Signal, QObject, QThread, Qt
-import napari_bruce.configuration as configuration
-import napari_bruce.workflow as workflow
+from . import configuration
+from . import workflow
 
 # Check Java
 workflow.require_java()

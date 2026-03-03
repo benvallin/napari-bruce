@@ -1,6 +1,6 @@
 # ***🦇 Bruce***
 
-**A napari plugin for drawing PALM RoboSoftware elements using StarDist segmentation**
+**A napari plugin for drawing PALMRobo elements using StarDist segmentation**
 
 
 ---
@@ -24,11 +24,11 @@ bruce -h
 
 ## Features
 
-- Load 2-channel images and metadata from `.zvi` files produced by PALM RoboSoftware 4.5
+- Load 2-channel images and metadata from `.zvi` files produced by PALMRobo 4.9
 - Perform StarDist-based cell segmentation (default or user-defined models)
 - Allow manual editing of ROIs / elements in napari
 - Perform ROI overlap analysis between 2 channels
-- Export element list as `.txt` file compatible with PALM RoboSoftware 4.5
+- Export element list as `.txt` file compatible with PALMRobo 4.9
 
 
 ---

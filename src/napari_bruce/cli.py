@@ -12,7 +12,7 @@ import itertools
 import tempfile
 from pathlib import Path
 from contextlib import redirect_stdout, redirect_stderr
-import napari_bruce.configuration as configuration
+from . import configuration
 
 # %% launch_napari_with_plugin() ----
 
