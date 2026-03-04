@@ -1,29 +1,15 @@
 # ***🦇 Bruce***
 
-**A napari plugin for drawing PALMRobo elements using StarDist segmentation**
+**A napari plugin for creating PALMRobo elements using StarDist segmentation**
 
 
 ---
 
+## Description
 
-## Quick start
+**Bruce** is a napari plugin for automated detection of cells of interest in PALM RoboSoftware images, enabling fast laser capture microdissection on the PALM MicroBeam system.
 
-After installation (see below), open a terminal and run:
-
-```bash
-# Launch Bruce via the command line
-bruce
-
-# List all available options 
-bruce -h
-```
-
-
----
-
-
-## Features
-
+Key features:
 - Load 2-channel images and metadata from `.zvi` files produced by PALMRobo 4.9
 - Perform StarDist-based cell segmentation (default or user-defined models)
 - Allow manual editing of ROIs / elements in napari
@@ -48,6 +34,7 @@ bruce -h
 ## Installation
 
 Bruce requires a **platform-specific Conda environment** due to differences in native dependencies and GPU support. Predefined environment files are provided in the `env/` directory:
+
 ```md
 | Platform                | Environment file                     |
 |-------------------------|--------------------------------------|
@@ -124,10 +111,4 @@ bruce --add-model <MODEL_DIR>
 ## Example images
 
 Example `.zvi` files are provided in the `example_images/` directory for testing and demonstration purposes.
-
 They are NOT installed with the napari-bruce Python package.
-
-To use them:
-1. Clone or download the repository from GitHub
-2. Launch Bruce
-3. Load the example files via the GUI

@@ -11,7 +11,6 @@ import threading
 import itertools
 import tempfile
 from pathlib import Path
-from contextlib import redirect_stdout, redirect_stderr
 from . import configuration
 
 # %% launch_napari_with_plugin() ----
