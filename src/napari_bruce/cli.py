@@ -106,6 +106,8 @@ def launch_napari_with_plugin(timeout=60.0):
   env = os.environ.copy()
   
   env['NAPARI_BRUCE_READY_FILE'] = str(ready_file)
+  
+  env.setdefault('QT_SCALE_FACTOR', '1')
 
   cmd = ['napari', '--with', 'napari-bruce']
 

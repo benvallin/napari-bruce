@@ -480,7 +480,7 @@ def status_dict_to_submsks_and_cnts(msk: np.ndarray,
       
   else:
     
-    get_cnt = lambda: {k:cnt_dict[k] for k in ids}
+    get_cnt = lambda: {k:cnt_dict[k] for k in ids if k in cnt_dict} 
   
   for i in status_dict.keys():
     
