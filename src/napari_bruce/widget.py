@@ -13,7 +13,6 @@ from pathlib import Path
 from enum import Enum, auto
 from matplotlib.colors import to_rgba
 from contextlib import redirect_stdout, redirect_stderr
-from csbdeep.utils import normalize
 from qtpy.QtWidgets import QPushButton, QWidget, QLabel, QVBoxLayout, QFileDialog, QSpinBox, QDoubleSpinBox, QHBoxLayout, QApplication, QSizePolicy, QStyle, QComboBox
 from qtpy.QtCore import Signal, QObject, QThread, Qt
 from . import configuration
@@ -417,6 +416,8 @@ class PredictFilterWorker(BaseWorker):
     self.do_predict = do_predict
     
   def compute(self):
+    
+    from csbdeep.utils import normalize
         
     output = {}
     filt_msk_changed = {}
@@ -877,10 +878,9 @@ class PluginManager(QWidget):
                                                           visible=True,
                                                           rendering='iso_categorical')
         
-        self.layers[i]['labels'].contrast_limits = (0, 65535)
         self.layers[i]['labels'].visible = False
-        self.layers[i]['labels'].contour = 0
-        self.layers[i]['labels'].brush_size = 80
+        self.layers[i]['labels'].contrast_limits = (0, 65535)
+        self.layers[i]['labels'].brush_size = 60
         
       for i in [0, 1]:
         
@@ -909,12 +909,19 @@ class PluginManager(QWidget):
         self.layers[i]['image'].data = image_array 
         self.layers[i]['image'].name = f'ch{i} normalized image'
         
+        self.layers[i]['labels'].visible = False
         self.layers[i]['labels'].data = label_array
         self.layers[i]['labels'].name = f'ch{i} - remove'
         self.layers[i]['labels'].contour = 0
+        self.layers[i]['labels'].opacity = 0.4
+        self.layers[i]['labels'].contrast_limits = (0, 65535)
+        self.layers[i]['labels'].brush_size = 60
         
+        self.layers[i]['shapes'].visible = False
         self.layers[i]['shapes'].data = []
         self.layers[i]['shapes'].name = f'ch{i} - add'
+        self.layers[i]['shapes'].edge_color = self.config['channels'][i]['color']
+        self.layers[i]['shapes'].edge_width = 6 
       
       self.layers['merge'].data = merge_array      
       self.layers['merge'].name = 'Merge + ROIs'
