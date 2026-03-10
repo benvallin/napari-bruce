@@ -665,7 +665,11 @@ def convert_zvi_to_ome(file: str,
 
 # %% load_ome_tiff() ----
 
-def load_ome_tiff(file: str) -> list:
+class InvalidImageError(Exception):
+  
+  pass
+
+def load_ome_tiff(file: str) -> tuple:
 
   """Load OME-TIFF file derived from PALM .zvi file.
   
@@ -673,10 +677,17 @@ def load_ome_tiff(file: str) -> list:
     file (str): path to .ome.tiff file.
   
   Returns:
-    list: list containing 'images' and 'metadata' dict objects.
+    tuple: tuple containing 'images' and 'metadata' dict objects.
 
   """
+  
+  # Load images
+  imgs = tifffile.imread(file)
+  
+  if imgs.ndim != 3:
      
+     raise InvalidImageError('Input file is not a multi-channel image.')
+      
   # Process metadata   
   ome = tifffile.TiffFile(file).ome_metadata    
   ome = ome_types.from_xml(str(ome))
@@ -715,13 +726,12 @@ def load_ome_tiff(file: str) -> list:
                                'emission_wavelength': j[0].emission_wavelength,
                                'exposure_time': j[1].exposure_time}
   
-  # Process images    
-  imgs = tifffile.imread(file)
+  # Process images   
   images = {}
   
   for k in metadata['channels'].keys():
     nm = metadata['channels'][k]['name']
-    images[nm] = {'img': imgs[k, :,:]}
+    images[nm] = {'img': imgs[k, :, :]}
   
   output = (images, metadata)
   

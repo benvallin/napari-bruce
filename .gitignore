@@ -15,7 +15,12 @@ venv/
 # OS files
 .DS_Store
 
+# Claude files
+.claude
+CLAUDE.md
+
 # Dev hide
 config.json
 deprecated/
 dev/
+

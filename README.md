@@ -111,4 +111,4 @@ bruce --add-model <MODEL_DIR>
 ## Example images
 
 Example `.zvi` files are provided in the `example_images/` directory for testing and demonstration purposes.
-They are NOT installed with the napari-bruce Python package.
+They are not installed with the napari-bruce Python package.

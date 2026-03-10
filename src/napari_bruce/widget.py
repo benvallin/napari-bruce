@@ -872,7 +872,7 @@ class PluginManager(QWidget):
         
         self.layers[i]['labels'] = self.viewer.add_labels(label_array,
                                                           name=f'ch{i} - remove',
-                                                          opacity=1.0,
+                                                          opacity=0.4,
                                                           colormap=color_dict,
                                                           visible=True,
                                                           rendering='iso_categorical')
@@ -993,17 +993,28 @@ class PluginManager(QWidget):
       elif state == ViewerState.ROI_EDITING:
         
         for k in [0, 1]:
-        
+          
           self.layers[k]['image'].visible = True
-
-          self.layers[k]['labels'].contour = 6
-          self.layers[k]['labels'].visible = True
-          self.layers[k]['labels'].editable = True
-          self.layers[k]['labels'].mode = 'erase'
-
-          self.layers[k]['shapes'].visible = True
-          self.layers[k]['shapes'].editable = True
-          self.layers[k]['shapes'].mode = 'add_path'
+          
+          labels = self.layers[k]['labels']
+          
+          with labels.events.blocker():
+            
+            labels.editable = True
+            labels.visible = True
+            labels.mode = 'erase'
+            
+          # labels.visible = True
+          
+          shapes = self.layers[k]['shapes']
+          
+          with shapes.events.blocker():
+            
+            shapes.editable = True
+            shapes.visible = True
+            shapes.mode = 'add_path'
+            
+          # shapes.visible = True
 
         self.viewer.layers.selection.active = self.layers[1]['shapes']
         
@@ -1352,7 +1363,6 @@ class PluginManager(QWidget):
         self.layers[k]['image'].data = self.workflow.data[v]['norm_img']
         self.layers[k]['image'].name = f'{v} normalized image'
       
-        self.layers[k]['labels'].data = np.zeros(self.workflow.data[v]['norm_img'].shape, dtype=np.uint16)
         self.layers[k]['labels'].name = f'{v} - remove'
       
         self.layers[k]['shapes'].name = f'{v} - add'
@@ -1364,14 +1374,15 @@ class PluginManager(QWidget):
     
   def update_viewer_data_on_predict_filter_finished(self, filt_msk_changed: dict):
     
-    with self.viewer.layers.events.blocker():
+    for k, v in self.workflow.ch_names.items():
+      
+      if filt_msk_changed[v]:
         
-      # Update labels and shapes layers 
-      for k, v in self.workflow.ch_names.items():
+        labels = self.layers[k]['labels']
         
-        if filt_msk_changed[v]:  
+        with labels.events.blocker():
           
-          self.layers[k]['labels'].data = self.workflow.data[v]['filt_msk'] 
+          labels.data = self.workflow.data[v]['filt_msk'] 
           
   def update_viewer_data_on_apply_edits_finished(self):
     
@@ -1493,7 +1504,7 @@ class PluginManager(QWidget):
                              worker_attr_name='_load_worker')
     
   def on_load_finished(self, worker_output: dict):
-    
+        
     data = worker_output['data']
     metadata = worker_output['metadata']
     
