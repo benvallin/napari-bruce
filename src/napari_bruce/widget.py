@@ -314,7 +314,7 @@ class LoadModelWorker(BaseWorker):
             pass
       
     with open(os.devnull, 'w') as f, redirect_stdout(f), redirect_stderr(f):
-      
+
       from stardist.models import StarDist2D
         
       pretrained = [k for k, v in configuration.list_stardist_models().items() if v == 'pretrained']
@@ -507,7 +507,7 @@ class ApplyEditsWorker(BaseWorker):
     self.ch_names = ch_names
           
   def compute(self):
-    
+
     px_area_um2 = self.metadata['image']['px_area_um2']
       
     output = {}
@@ -608,7 +608,7 @@ class OverlapWorker(BaseWorker):
     self.ch_names = ch_names
     
   def compute(self):
-    
+
     ch0_nm = self.ch_names[0]
     ch1_nm = self.ch_names[1]
     
@@ -849,7 +849,7 @@ class PluginManager(QWidget):
     self.setMaximumWidth(1000)   
   
   def init_viewer_layers(self):
-    
+
     self.layers = {}
       
     image_array = np.zeros((1, 1), dtype=np.uint8)

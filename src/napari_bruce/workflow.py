@@ -1,15 +1,12 @@
 # %% Import required libraries ----
 
+from __future__ import annotations
 import os
 import math
 import numpy as np
-import pandas as pd
 import subprocess
 import shutil
-import tifffile
-import cv2
 import pickle
-import ome_types
 import importlib.resources
 from itertools import groupby, chain
 from typing import Any
@@ -34,9 +31,11 @@ def robust_normalization(img: np.ndarray,
 
   """
   
-  # Clip to low / high percentiles 
+  import cv2
+
+  # Clip to low / high percentiles
   low, high = np.percentile(img, (low_pct, high_pct))
-  
+
   # Normalize to 0–255 (uint8)
   output = cv2.normalize(np.clip(img, low, high), 
                          None, 
@@ -60,14 +59,16 @@ def msk_to_cnts(msk: np.ndarray) -> dict:
 
   """
   
+  import cv2
+
   output = {}
-  
+
   for i in np.unique(msk)[1:]:
-    
+
     m = msk == i
-    
+
     if m.sum() > 0:
-      
+
       c = cv2.findContours(m.astype(np.uint8), 
                            mode=cv2.RETR_EXTERNAL, 
                            method=cv2.CHAIN_APPROX_NONE)
@@ -148,10 +149,12 @@ def append_shapes_to_msk(msk: np.ndarray,
 
   """
   
+  import cv2
+
   idx = start_idx
-  
+
   output = msk.copy()
-  
+
   for i in shapes.copy():
     roi = np.vstack([i, i[0]])
     roi = roi[:, ::-1].astype(np.int32).reshape((-1, 1, 2))
@@ -681,6 +684,9 @@ def load_ome_tiff(file: str) -> tuple:
 
   """
   
+  import tifffile
+  import ome_types
+  
   # Load images
   imgs = tifffile.imread(file)
   
@@ -750,9 +756,11 @@ def txt_to_elem_dfs(file: str) -> list:
     list: list of element-specific pandas.DataFrame objects.
 
   """
-    
-  # Construct pd.DataFrame from elements.txt 
-  df = pd.read_csv(filepath_or_buffer=file, 
+
+  import pandas as pd
+
+  # Construct pd.DataFrame from elements.txt
+  df = pd.read_csv(filepath_or_buffer=file,
                    sep='\t',
                    skiprows=7)
   
@@ -995,7 +1003,7 @@ def format_elem_cnt(elem_cnt: np.ndarray,
                     ) -> pd.DataFrame:
 
   """Format element contours for PALM RoboSoftware.
-  
+
   Args:
     elem_cnt (numpy.ndarray): element-specific contours as an array of shape (N, 2).
     id (int): element ID.
@@ -1005,12 +1013,14 @@ def format_elem_cnt(elem_cnt: np.ndarray,
     area (float): element area in µm2.
     comment (str): element comment.
     objective (str): objective used for image acquisition.
-  
+
   Returns:
     pandas.DataFrame: element-specific DataFrame matching PALM RoboSoftware format.
 
   """
-    
+
+  import pandas as pd
+
   header = pd.DataFrame({'Type': ['', 'Freehand'],
                          'Color': ['', color],
                          'Thickness': ['', '2'],
@@ -1075,7 +1085,9 @@ def make_elem_txt(data_dict: dict,
     str: string with PALM element properties to be written to .txt file.
 
   """
-  
+
+  import pandas as pd
+
   date_time = datetime.now().strftime(f'%d.%m.%Y\t%H:%M:%S')
   
   header = f'''PALMRobo Elements
