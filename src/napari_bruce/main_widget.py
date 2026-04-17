@@ -373,7 +373,7 @@ class LoadModelWorker(BaseWorker):
 
                 else:
 
-                    stardist_models_dir_path = os.path.join(
+                    stardist_models_dir_path = Path(
                         importlib.resources.files("napari_bruce"), "stardist_models"
                     )
 
@@ -398,11 +398,11 @@ class LoadWorker(BaseWorker):
     def compute(self):
 
         # Define output paths
-        out_dir_path = os.path.join(
+        out_dir_path = Path(
             Path(self.config["out_dir_path"]).expanduser(), Path(self.path).stem
         )
 
-        ome_tiff_file_path = os.path.join(
+        ome_tiff_file_path = Path(
             out_dir_path, Path(self.path).stem + ".ome.tiff"
         )
 
@@ -1884,7 +1884,7 @@ class PluginManager(QWidget):
         self.read_elem_boxes()
 
         # Define output directory path
-        out_dir_path = os.path.join(
+        out_dir_path = Path(
             Path(self.config["out_dir_path"]).expanduser(),
             self.workflow.metadata["img_nm"],
         )
@@ -1899,21 +1899,21 @@ class PluginManager(QWidget):
             submsks_area_um2_key="submsks_area_um2",
         )
 
-        with open(os.path.join(out_dir_path, "elem_list.txt"), "w") as f:
+        with open(Path(out_dir_path, "elem_list.txt"), "w") as f:
             f.write(self.elem_list)
 
         # Write data and metadata to file
         workflow.pickle_data(
-            data=self.workflow.data, filename=os.path.join(out_dir_path, "data.pkl")
+            data=self.workflow.data, filename=Path(out_dir_path, "data.pkl")
         )
 
         workflow.pickle_data(
             data=self.workflow.metadata,
-            filename=os.path.join(out_dir_path, "metadata.pkl"),
+            filename=Path(out_dir_path, "metadata.pkl"),
         )
 
         # Write config to file
-        with open(os.path.join(out_dir_path, "config.json"), "w") as f:
+        with open(Path(out_dir_path, "config.json"), "w") as f:
             json.dump(self.config, f, indent=2)
 
         self.set_message(

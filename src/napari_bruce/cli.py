@@ -12,7 +12,7 @@ import itertools
 import tempfile
 from pathlib import Path
 from . import configuration
-from . import utils
+from . import workflow
 
 # %% launch_napari_with_plugin() ----
 
@@ -366,7 +366,7 @@ def cli_main(argv: list[str] | None = None) -> None:
 
             tiff = True if args.save_tiff else False
 
-            utils.zvi_to_dict(
+            workflow.zvi_to_dict(
                 in_dir_path=in_dir_path,
                 out_dir_path=out_dir_path,
                 ome_tiff=ome_tiff,

@@ -3,15 +3,17 @@
 from __future__ import annotations
 import os
 import math
+import pickle
+import tifffile
 import numpy as np
 import subprocess
 import shutil
-import pickle
 import importlib.resources
 from itertools import groupby, chain
-from typing import Any
 from pathlib import Path
 from datetime import datetime
+from enum import Enum
+from typing import Any
 
 # %% robust_normalization() ----
 
@@ -530,73 +532,6 @@ def status_dict_to_submsks_and_cnts(
     output = (submsks, cnts)
 
     return output
-
-
-# %% make_picklable() ----
-
-
-def make_picklable(data: Any) -> Any:
-    """Make an object pickle-able.
-
-    Args:
-      data: object to make pickle-able.
-
-    Returns:
-      A deep-copy of data containing only picklable primitives and numpy arrays. If a napari layer object is found, tries to extract .data if present.
-
-    """
-
-    def sanitize(obj):
-        # Basic safe types
-        if obj is None or isinstance(obj, (int, float, str, bool)):
-            return obj
-        if isinstance(obj, np.ndarray):
-            return obj  # Arrays are picklable
-        if isinstance(obj, (list, tuple)):
-            return type(obj)(sanitize(x) for x in obj)
-        if isinstance(obj, dict):
-            return {k: sanitize(v) for k, v in obj.items()}
-        # Napari layers commonly have .data attribute we can use
-        if hasattr(obj, "data"):
-            try:
-                d = getattr(obj, "data")
-                # If it's a napari layer, d is usually numpy array
-                if isinstance(d, np.ndarray):
-                    return d.copy()
-            except Exception:
-                pass
-        # Fallback: try pickle; if that fails, replace with a string summary
-        try:
-            pickle.dumps(obj)
-            return obj
-        except Exception:
-            return f"<Unserializable:{type(obj).__name__}>"
-
-    output = sanitize(obj=data)
-
-    return output
-
-
-# %% pickle_data() ----
-
-
-def pickle_data(data: Any, filename: str) -> None:
-    """Make an object pickle-able and write it to pickle file.
-
-    Args:
-      data: object to make pickle-able and write to file.
-      filename (str): file name.
-
-    Side effects:
-      Write object to pickle file.
-
-    """
-
-    sanitized = make_picklable(data=data)
-
-    with open(filename, "wb") as f:
-
-        pickle.dump(sanitized, f, protocol=pickle.HIGHEST_PROTOCOL)
 
 
 # %% require_java() ----
@@ -1338,3 +1273,176 @@ def choose_stardist_n_tiles(
     nx = max(1, int(np.ceil(w / max_tile_px)))
 
     return ny, nx
+
+
+# %% make_picklable() ----
+
+
+def make_picklable(data: Any) -> Any:
+    """Make an object pickle-able.
+
+    Args:
+      data: object to make pickle-able.
+
+    Returns:
+      A deep-copy of data containing only picklable primitives and numpy arrays. If a napari layer object is found, tries to extract .data if present.
+
+    """
+
+    def sanitize(obj):
+        # Basic safe types
+        if obj is None or isinstance(obj, (int, float, str, bool)):
+            return obj
+        if isinstance(obj, np.ndarray):
+            return obj  # Arrays are picklable
+        if isinstance(obj, Enum):
+            return obj.value
+        if isinstance(obj, (list, tuple)):
+            return type(obj)(sanitize(x) for x in obj)
+        if isinstance(obj, dict):
+            return {k: sanitize(v) for k, v in obj.items()}
+        # Napari layers commonly have .data attribute we can use
+        if hasattr(obj, "data"):
+            try:
+                d = getattr(obj, "data")
+                # If it's a napari layer, d is usually numpy array
+                if isinstance(d, np.ndarray):
+                    return d.copy()
+            except Exception:
+                pass
+        # Fallback: try pickle; if that fails, replace with a string summary
+        try:
+            pickle.dumps(obj)
+            return obj
+        except Exception:
+            return f"<Unserializable:{type(obj).__name__}>"
+
+    output = sanitize(obj=data)
+
+    return output
+
+
+# %% pickle_data() ----
+
+
+def pickle_data(data: Any, filename: str) -> None:
+    """Make an object pickle-able and write it to pickle file.
+
+    Args:
+      data: object to make pickle-able and write to file.
+      filename (str): file name.
+
+    Side effects:
+      Write object to pickle file.
+
+    """
+
+    sanitized = make_picklable(data=data)
+
+    with open(filename, "wb") as f:
+
+        pickle.dump(sanitized, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+
+# %% zvi_to_dict() ----
+
+
+def zvi_to_dict(
+    in_dir_path: str, out_dir_path: str, ome_tiff: bool = False, tiff: bool = False
+):
+
+    in_dir_path = Path(in_dir_path).expanduser()
+    out_dir_path = Path(out_dir_path).expanduser()
+
+    # Create output directory if necessary
+    out_dir_path.mkdir(parents=True, exist_ok=True)
+
+    # Define output subdirectories
+    ome_tiff_dir_path = Path(out_dir_path, "ome.tiff")
+    tiff_dir_path = Path(out_dir_path, "tiff")
+
+    # List image files
+    img_fn = list(in_dir_path.rglob("*zvi"))
+
+    # Construct imgs dict
+    print("Constructing imgs dict...\n")
+
+    imgs = {}
+    imgs_excluded = []
+
+    for i in img_fn:
+
+        fn = i.stem
+
+        # Convert PALM .zvi file to OME-TIFF
+        # => Write multi channel images to ome.tiff files at out_dir_path/ome.tiff/
+        convert_zvi_to_ome(
+            file=i,
+            out_dir_path=ome_tiff_dir_path,
+            jar_pkg="napari_bruce.bioformats",
+            jar_name="bioformats_package.jar",
+        )
+
+        # Load images and associated metadata
+        ome_tiff_file_path = Path(ome_tiff_dir_path, f"{fn}.ome.tiff")
+
+        try:
+
+            raw_data, raw_metadata = load_ome_tiff(file=ome_tiff_file_path)
+
+        except InvalidImageError:
+
+            print(f"Excluding {fn}")
+
+            imgs_excluded.append(fn)
+
+            continue
+
+        # Subset data and metadata to the first 2 channels
+        data = dict(list(raw_data.items())[:2])
+
+        metadata = {
+            **raw_metadata,
+            "channels": dict(list(raw_metadata["channels"].items())[:2]),
+        }
+
+        # For each channel, perform robust normalization
+        for i, k in enumerate(data.keys()):
+
+            norm_img = robust_normalization(
+                img=data[k]["img"], low_pct=0.05, high_pct=99.9999
+            )
+
+            data[k] = {**data[k], "norm_img": norm_img}
+
+        imgs[fn] = {"data": data, "metadata": metadata}
+
+    # Write imgs dict to file
+    pickle_data(data=imgs, filename=Path(out_dir_path, "imgs.pkl"))
+
+    # Delete out_dir_path/ome.tiff/ is requested
+    if not ome_tiff:
+        shutil.rmtree(ome_tiff_dir_path)
+
+    # Write imgs_excluded list to file
+    Path(out_dir_path, "images_excluded.txt").write_text("\n".join(imgs_excluded))
+
+    # Write single channel images to tiff files at out_dir_path/tiff/ is requested
+    if tiff:
+        tiff_dir_path.mkdir(parents=True, exist_ok=True)
+        for i in imgs.keys():
+            try:
+
+                for j in imgs[i]["data"]:
+                    tifffile.imwrite(
+                        Path(tiff_dir_path, f"{i}_{j}_img.tiff"),
+                        imgs[i]["data"][j]["img"],
+                    )
+                    tifffile.imwrite(
+                        Path(tiff_dir_path, f"{i}_{j}_norm_img.tiff"),
+                        imgs[i]["data"][j]["norm_img"],
+                    )
+            except:
+                continue
+
+    print("Job complete!")
