@@ -1348,7 +1348,7 @@ def pickle_data(data: Any, filename: str) -> None:
 
 
 def zvi_to_dict(
-    in_dir_path: str, out_dir_path: str, ome_tiff: bool = False, tiff: bool = False
+    in_dir_path: str, out_dir_path: str, low_pct_dict: dict, high_pct_dict: dict, ome_tiff: bool = False, tiff: bool = False
 ):
 
     in_dir_path = Path(in_dir_path).expanduser()
@@ -1410,7 +1410,7 @@ def zvi_to_dict(
         for i, k in enumerate(data.keys()):
 
             norm_img = robust_normalization(
-                img=data[k]["img"], low_pct=0.05, high_pct=99.9999
+                img=data[k]["img"], low_pct=low_pct_dict[i], high_pct=high_pct_dict[i]
             )
 
             data[k] = {**data[k], "norm_img": norm_img}

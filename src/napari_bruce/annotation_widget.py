@@ -18,10 +18,14 @@ from qtpy.QtWidgets import (
 )
 
 from . import workflow
+from . import configuration
 
-# Fixed channel colors
-CHANNEL_COLORS = ["purple", "cyan"]
-
+# Get channel-specific ROI colors from configuration
+config = configuration.get_config()
+CHANNEL_COLORS = [
+    config["channels_annotation"][0]["color"],
+    config["channels_annotation"][1]["color"],
+]
 
 # %% LoadPklWorker ----
 

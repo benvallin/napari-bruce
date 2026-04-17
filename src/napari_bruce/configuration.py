@@ -172,6 +172,7 @@ def check_config_integrity(config: dict) -> None:
         "min_pct_ovl_ch0_by_ch1": (int, float),
         "min_pct_ovl_ch1_by_ch0": (int, float),
         "elements": dict,
+        "channels_annotation": dict,
     }
 
     exp_ch_kv = {"0": dict, "1": dict}
@@ -198,6 +199,14 @@ def check_config_integrity(config: dict) -> None:
         "collect": bool,
         "laser_function": str,
         "tube_id": str,
+    }
+
+    exp_ch_annot_kv = {"0": dict, "1": dict}
+
+    exp_subch_annot_kv = {
+        "low_pct": (int, float),
+        "high_pct": (int, float),
+        "color": str,
     }
 
     check_dict_kv(exp_kv=exp_main_kv, in_dict=config, dict_nm="config main")
@@ -264,6 +273,31 @@ def check_config_integrity(config: dict) -> None:
                 f"config['elements']['{i}']['tube_id'] must be one of {', '.join(available_tube_ids)}."
             )
 
+    check_dict_kv(
+        exp_kv=exp_ch_annot_kv,
+        in_dict=config["channels_annotation"],
+        dict_nm="config channels annotation",
+    )
+
+    for i in config["channels_annotation"].keys():
+
+        check_dict_kv(
+            exp_kv=exp_subch_annot_kv,
+            in_dict=config["channels_annotation"][i],
+            dict_nm=f"config channel annotation {i}",
+        )
+
+        for j in ["low_pct", "high_pct"]:
+
+            if not (
+                config["channels_annotation"][i][j] >= 0
+                and config["channels_annotation"][i][j] <= 100
+            ):
+
+                raise ConfigError(
+                    f"config['channels_annotation']['{i}']['{j}'] must be between 0 and 100."
+                )
+
     return
 
 
@@ -302,7 +336,7 @@ def make_default_config() -> dict:
             1: {
                 "name": "pSyn",
                 "low_pct": 0.05,
-                "high_pct": 99.95,
+                "high_pct": 99.9999,
                 "stardist_model": "stardist_psyn",
                 "min_area_um2": 50,
                 "color": "cyan",
@@ -340,6 +374,18 @@ def make_default_config() -> dict:
                 "collect": False,
                 "laser_function": "RoboLPC",
                 "tube_id": "Tube 5",
+            },
+        },
+        "channels_annotation": {
+            0: {
+                "low_pct": 0.05,
+                "high_pct": 99.95,
+                "color": "purple",
+            },
+            1: {
+                "low_pct": 0.05,
+                "high_pct": 99.9999,
+                "color": "cyan",
             },
         },
     }
@@ -381,6 +427,9 @@ def get_config() -> dict:
             raise OSError(f"Could not read config file.")
 
         check_config_integrity(config=output)
+
+        for i in ["channels", "channels_annotation"]:
+            output[i] = {int(k): v for k, v in output[i].items()}
 
     else:
 

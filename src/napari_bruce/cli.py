@@ -366,9 +366,23 @@ def cli_main(argv: list[str] | None = None) -> None:
 
             tiff = True if args.save_tiff else False
 
+            config = configuration.get_config()
+
+            low_pct_dict = {
+                0: config["channels_annotation"][0]["low_pct"],
+                1: config["channels_annotation"][1]["low_pct"],
+            }
+
+            high_pct_dict = {
+                0: config["channels_annotation"][0]["high_pct"],
+                1: config["channels_annotation"][1]["high_pct"],
+            }
+
             workflow.zvi_to_dict(
                 in_dir_path=in_dir_path,
                 out_dir_path=out_dir_path,
+                low_pct_dict=low_pct_dict,
+                high_pct_dict=high_pct_dict,
                 ome_tiff=ome_tiff,
                 tiff=tiff,
             )

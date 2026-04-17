@@ -37,9 +37,6 @@ workflow.require_java()
 # Load configuration
 config = configuration.get_config()
 
-# Convert config['channels'] keys to int if read from json file
-config["channels"] = {int(k): v for k, v in config["channels"].items()}
-
 # Signal program started
 ready_path = os.environ.get("NAPARI_BRUCE_READY_FILE")
 
@@ -402,9 +399,7 @@ class LoadWorker(BaseWorker):
             Path(self.config["out_dir_path"]).expanduser(), Path(self.path).stem
         )
 
-        ome_tiff_file_path = Path(
-            out_dir_path, Path(self.path).stem + ".ome.tiff"
-        )
+        ome_tiff_file_path = Path(out_dir_path, Path(self.path).stem + ".ome.tiff")
 
         # Convert PALM .zvi file to OME-TIFF
         workflow.convert_zvi_to_ome(
