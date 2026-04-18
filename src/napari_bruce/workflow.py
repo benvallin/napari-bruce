@@ -1348,11 +1348,41 @@ def pickle_data(data: Any, filename: str) -> None:
 
 
 def zvi_to_dict(
-    in_dir_path: str, out_dir_path: str, low_pct_dict: dict, high_pct_dict: dict, ome_tiff: bool = False, tiff: bool = False
-):
+    in_dir_path: str,
+    out_dir_path: str,
+    low_pct_dict: dict,
+    high_pct_dict: dict,
+    ome_tiff: bool = False,
+    tiff: bool = False,
+) -> None:
+    """Store 2-channel image .zvi files to .pkl.
+
+    Args:
+      in_dir_path (str): path to input directory containing .zvi files to process.
+      out_dir_path (str): path to output directory.
+      img (numpy.ndarray): image to normalize.
+      low_pct (float): lower percentile to clip for robust normalization of images.
+      high_pct (float): upper percentile to clip for robust normalization of images.
+      ome_tiff (bool): True to save OME-TIFF images to out_dir_path/ome.tiff/.
+      tiff (bool): True to save single-channel .tiff files to out_dir_path/tiff/.
+
+    Side effects:
+      Write set of 2-channel image .zvi files to out_dir_path/imgs.pkl.
+
+    """
 
     in_dir_path = Path(in_dir_path).expanduser()
     out_dir_path = Path(out_dir_path).expanduser()
+    out_dir_path_exists = out_dir_path.is_dir()
+
+    # List image files
+    img_fn = list(in_dir_path.rglob("*zvi"))
+
+    if len(img_fn) == 0:
+
+        print("Input directory does not contain .zvi files.")
+
+        return
 
     # Create output directory if necessary
     out_dir_path.mkdir(parents=True, exist_ok=True)
@@ -1360,9 +1390,6 @@ def zvi_to_dict(
     # Define output subdirectories
     ome_tiff_dir_path = Path(out_dir_path, "ome.tiff")
     tiff_dir_path = Path(out_dir_path, "tiff")
-
-    # List image files
-    img_fn = list(in_dir_path.rglob("*zvi"))
 
     # Construct imgs dict
     print("Constructing imgs dict...\n")
@@ -1416,6 +1443,17 @@ def zvi_to_dict(
             data[k] = {**data[k], "norm_img": norm_img}
 
         imgs[fn] = {"data": data, "metadata": metadata}
+
+    if len(imgs) == 0:
+
+        print("Input directory does not contain 2-channel image .zvi files. Aborting.")
+
+        if out_dir_path_exists:
+            shutil.rmtree(ome_tiff_dir_path)
+        else:
+            shutil.rmtree(out_dir_path)
+
+        return
 
     # Write imgs dict to file
     pickle_data(data=imgs, filename=Path(out_dir_path, "imgs.pkl"))

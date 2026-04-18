@@ -5,14 +5,17 @@ import traceback
 from pathlib import Path
 
 import numpy as np
+from enum import Enum
 from qtpy.QtCore import QEvent, QObject, QThread, Qt, Signal
 from qtpy.QtGui import QFontMetrics
 from qtpy.QtWidgets import (
+    QApplication,
     QHBoxLayout,
     QLabel,
     QMessageBox,
     QPushButton,
     QSizePolicy,
+    QStyle,
     QVBoxLayout,
     QWidget,
 )
@@ -26,6 +29,21 @@ CHANNEL_COLORS = [
     config["channels_annotation"][0]["color"],
     config["channels_annotation"][1]["color"],
 ]
+
+# %% MessageLevel ----
+
+
+class MessageLevel(Enum):
+
+    NONE = None
+    INFO = QStyle.SP_MessageBoxInformation
+    BUSY = QStyle.SP_BrowserReload
+    WORK = QStyle.SP_ComputerIcon
+    CHECK = QStyle.SP_ArrowRight
+    SAVE = QStyle.SP_DialogSaveButton
+    WARNING = QStyle.SP_MessageBoxWarning
+    ERROR = QStyle.SP_MessageBoxCritical
+
 
 # %% LoadPklWorker ----
 
@@ -172,13 +190,32 @@ class AnnotationManager(QWidget):
         self.btn_save.clicked.connect(self._on_save_clicked)
         self.btn_save.setEnabled(False)
 
+        self.msg_icon = QLabel()
+        self.msg_icon.setFixedSize(16, 16)
+        self.msg_icon.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.msg_icon.setVisible(False)
+
+        self.msg_text = QLabel("")
+        self.msg_text.setWordWrap(True)
+        self.msg_text.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.msg_text.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+
+        self.msg_container = QWidget()
+        self.msg_layout = QHBoxLayout(self.msg_container)
+        self.msg_layout.setContentsMargins(0, 0, 0, 0)
+        self.msg_layout.setSpacing(6)
+        self.msg_layout.addWidget(self.msg_icon, alignment=Qt.AlignTop)
+        self.msg_layout.addWidget(self.msg_text, stretch=1)
+
         layout = QVBoxLayout()
         layout.addWidget(self.lbl_counter)
         layout.addLayout(nav_row)
         layout.addWidget(self.btn_save)
+        layout.addWidget(self.msg_container)
 
         self.setLayout(layout)
-        self.setFixedWidth(QFontMetrics(self.font()).averageCharWidth() * 25)
+        self.setMinimumWidth(300)
+        self.setMaximumWidth(1000)
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
 
     def _update_counter(self):
@@ -357,6 +394,22 @@ class AnnotationManager(QWidget):
 
                 self.imgs[fn]["data"][cn_data]["msk"] = empty_msk
 
+    # %% Message ----
+
+    def set_message(self, text: str, level: MessageLevel = MessageLevel.NONE):
+
+        self.msg_text.setText(text)
+
+        if level.value is None:
+
+            self.msg_icon.setVisible(False)
+
+        else:
+
+            icon = QApplication.style().standardIcon(level.value)
+            self.msg_icon.setPixmap(icon.pixmap(16, 16))
+            self.msg_icon.setVisible(True)
+
     # %% Button handlers ----
 
     def _on_prev_clicked(self):
@@ -380,7 +433,70 @@ class AnnotationManager(QWidget):
 
         self._unsaved_changes = False
 
-        print(f"Annotations saved to:\n{out_path}")
+        self.set_message(f"Annotations saved to:\n{out_path}", MessageLevel.SAVE)
+
+
+# %% validate_annotation_inputs() ----
+
+
+def validate_annotation_inputs(in_dir_path: str, out_dir_path: str) -> None:
+    """Raise ValueError with a clear message if the annotation inputs are unusable."""
+
+    in_dir = Path(in_dir_path).expanduser()
+    out_dir = Path(out_dir_path).expanduser()
+
+    annotated_pkl = out_dir / "imgs_annotated.pkl"
+    source_pkl = in_dir / "imgs.pkl"
+
+    if annotated_pkl.exists():
+        pkl_path = annotated_pkl
+    elif source_pkl.exists():
+        pkl_path = source_pkl
+    else:
+        raise ValueError(
+            f"No input file found.\n"
+            f"Expected one of:\n"
+            f"  {annotated_pkl}\n"
+            f"  {source_pkl}"
+        )
+
+    try:
+        with open(pkl_path, "rb") as f:
+            imgs = pickle.load(f)
+    except Exception as e:
+        raise ValueError(f"Could not load {pkl_path}:\n{type(e).__name__}: {e}") from e
+
+    if not isinstance(imgs, dict) or len(imgs) == 0:
+        raise ValueError(
+            f"{pkl_path} must be a non-empty dict, got {type(imgs).__name__}."
+        )
+
+    for fn, entry in imgs.items():
+
+        if not isinstance(entry, dict) or "data" not in entry:
+            raise ValueError(f"{pkl_path}: entry '{fn}' is missing the 'data' key.")
+
+        ch_data = entry["data"]
+
+        if not isinstance(ch_data, dict) or len(ch_data) == 0:
+            raise ValueError(
+                f"{pkl_path}: 'data' for entry '{fn}' must be a non-empty dict."
+            )
+
+        for ch, ch_entry in ch_data.items():
+
+            for key in ("norm_img", "img"):
+
+                if key not in ch_entry:
+                    raise ValueError(
+                        f"{pkl_path}: entry '{fn}', channel '{ch}' is missing '{key}'."
+                    )
+
+                if not isinstance(ch_entry[key], np.ndarray):
+                    raise ValueError(
+                        f"{pkl_path}: entry '{fn}', channel '{ch}': "
+                        f"'{key}' must be a numpy array, got {type(ch_entry[key]).__name__}."
+                    )
 
 
 # %% launch_annotation_viewer() ----

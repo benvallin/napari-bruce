@@ -393,7 +393,14 @@ def cli_main(argv: list[str] | None = None) -> None:
 
             in_dir_path, out_dir_path = args.annotate
 
-            from .annotation_widget import launch_annotation_viewer
+            from .annotation_widget import (
+                validate_annotation_inputs,
+                launch_annotation_viewer,
+            )
+
+            validate_annotation_inputs(
+                in_dir_path=in_dir_path, out_dir_path=out_dir_path
+            )
 
             launch_annotation_viewer(in_dir_path=in_dir_path, out_dir_path=out_dir_path)
 
