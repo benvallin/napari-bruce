@@ -7,7 +7,6 @@ from pathlib import Path
 import numpy as np
 from enum import Enum
 from qtpy.QtCore import QEvent, QObject, QThread, Qt, Signal
-from qtpy.QtGui import QFontMetrics
 from qtpy.QtWidgets import (
     QApplication,
     QHBoxLayout,
@@ -26,8 +25,8 @@ from . import configuration
 # Get channel-specific ROI colors from configuration
 config = configuration.get_config()
 CHANNEL_COLORS = [
-    config["channels_annotation"][0]["color"],
-    config["channels_annotation"][1]["color"],
+    config["channels_annotation"][i]["color"]
+    for i in sorted(config["channels_annotation"].keys())
 ]
 
 # %% MessageLevel ----
@@ -142,8 +141,8 @@ class AnnotationManager(QWidget):
         self.n_imgs = 0
         self.idx = 0
 
-        self.img_layers = {}
-        self.shape_layers = {}
+        self.img_layers = []
+        self.shape_layers = []
 
         self._unsaved_changes = False
         self._loading = False
@@ -268,7 +267,6 @@ class AnnotationManager(QWidget):
 
             return
 
-        self._init_viewer_layers()
         self._load_image(0)
 
         self.btn_save.setEnabled(True)
@@ -279,68 +277,79 @@ class AnnotationManager(QWidget):
 
     # %% Viewer layers ----
 
-    def _init_viewer_layers(self):
-
-        ch_names = list(self.imgs[self.img_keys[0]]["data"].keys())
-        image_array = np.zeros((1, 1), dtype=np.uint8)
-
-        with self.viewer.layers.events.blocker():
-
-            # Image layers added first — appear below shapes in the layer list
-            for cn in ch_names:
-
-                self.img_layers[cn] = self.viewer.add_image(
-                    image_array,
-                    name=f"{cn} - image",
-                    visible=True,
-                )
-
-            # Shapes layers added second — appear above images in the layer list
-            for i, (cn, col) in enumerate(zip(ch_names, CHANNEL_COLORS)):
-
-                layer = self.viewer.add_shapes(
-                    data=[],
-                    name=f"{cn} - ROIs",
-                    edge_color=col,
-                    face_color="transparent",
-                    edge_width=6,
-                    visible=True,
-                )
-                layer.current_face_color = "transparent"
-                layer.current_edge_color = col
-                layer.current_edge_width = 6
-                layer.events.data.connect(self._on_shapes_changed)
-                self.shape_layers[cn] = layer
-
     def _on_shapes_changed(self, *args, **kwargs):
 
         if not self._loading:
 
             self._unsaved_changes = True
 
+    def _rebuild_viewer_layers(self, ch_names_data: list):
+        """Replace all managed layers with a fresh set sized to ch_names_data."""
+
+        for layer in self.img_layers + self.shape_layers:
+            self.viewer.layers.remove(layer)
+
+        self.img_layers = []
+        self.shape_layers = []
+
+        # Image layers added first — appear below shapes in the layer list
+        for cn in ch_names_data:
+            self.img_layers.append(
+                self.viewer.add_image(
+                    np.zeros((1, 1), dtype=np.uint8),
+                    name=f"{cn} - image",
+                    visible=True,
+                )
+            )
+
+        # Shapes layers added second — appear above images in the layer list
+        for i, cn in enumerate(ch_names_data):
+            col = CHANNEL_COLORS[i % len(CHANNEL_COLORS)]
+            layer = self.viewer.add_shapes(
+                data=[],
+                name=f"{cn} - ROIs",
+                edge_color=col,
+                face_color="transparent",
+                edge_width=6,
+                visible=True,
+            )
+            layer.events.data.connect(self._on_shapes_changed)
+            self.shape_layers.append(layer)
+
     def _load_image(self, idx: int):
 
         fn = self.img_keys[idx]
-        ch_names_data = list(self.imgs[fn]["data"].keys())
+        fn_data = self.imgs[fn]["data"]
+        ch_names_data = list(fn_data.keys())
+        n_ch = len(ch_names_data)
 
         self._loading = True
 
         with self.viewer.layers.events.blocker():
 
-            for i, (cn_layer, cn_data) in enumerate(
-                zip(self.img_layers, ch_names_data)
-            ):
+            if len(self.img_layers) != n_ch:
+                # Channel count changed — rebuild the pool (rare)
+                self._rebuild_viewer_layers(ch_names_data)
 
-                data = self.imgs[fn]["data"][cn_data]
+            else:
+                # Same channel count — rename to placeholders first to avoid
+                # conflicts when a channel name matches a slot from the previous image
+                for i in range(n_ch):
+                    self.img_layers[i].name = f"__slot{i}__"
+                    self.shape_layers[i].name = f"__slot{i}_rois__"
 
-                self.img_layers[cn_layer].data = data["norm_img"]
-                self.img_layers[cn_layer].name = f"{cn_data} - image"
-                self.img_layers[cn_layer].reset_contrast_limits()
+            for i, cn in enumerate(ch_names_data):
+
+                data = fn_data[cn]
+                col = CHANNEL_COLORS[i % len(CHANNEL_COLORS)]
+
+                self.img_layers[i].data = data["norm_img"]
+                self.img_layers[i].name = f"{cn} - image"
+                self.img_layers[i].reset_contrast_limits()
+                self.img_layers[i].visible = True
 
                 existing_rois = data.get("rois", [])
-
-                layer = self.shape_layers[cn_layer]
-                layer.name = f"{cn_data} - ROIs"
+                layer = self.shape_layers[i]
                 layer.data = (
                     [arr.copy() for arr in existing_rois] if existing_rois else []
                 )
@@ -350,10 +359,17 @@ class AnnotationManager(QWidget):
                     layer.edge_width = 6
                     layer.selected_data = set()
 
+                layer.name = f"{cn} - ROIs"
                 layer.current_face_color = "transparent"
-                layer.current_edge_color = CHANNEL_COLORS[i]
+                layer.current_edge_color = col
                 layer.current_edge_width = 6
-                layer.mode = "add_path"
+                layer.visible = True
+
+        # Set mode after the blocker exits so the viewer always fires a mode
+        # event and updates its toolbar — setting it inside the blocker suppresses
+        # the event, leaving the toolbar stale on rebuild and the next in-place load
+        for layer in self.shape_layers:
+            layer.mode = "add_path"
 
         self._loading = False
 
@@ -366,20 +382,19 @@ class AnnotationManager(QWidget):
     # %% Annotation save / convert ----
 
     def _save_current_annotations(self):
-        """Save shapes layer data back into imgs dict and convert to label masks."""
 
         fn = self.img_keys[self.idx]
-        ch_names_data = list(self.imgs[fn]["data"].keys())
+        fn_data = self.imgs[fn]["data"]
 
-        for cn_layer, cn_data in zip(self.shape_layers, ch_names_data):
+        for i, cn in enumerate(fn_data.keys()):
 
-            layer = self.shape_layers[cn_layer]
+            layer = self.shape_layers[i]
             rois = [arr.copy() for arr in layer.data]
+            ch = fn_data[cn]
 
-            self.imgs[fn]["data"][cn_data]["rois"] = rois
+            ch["rois"] = rois
 
-            img_shape = self.imgs[fn]["data"][cn_data]["img"].shape
-            empty_msk = np.zeros(img_shape, dtype=np.uint16)
+            empty_msk = np.zeros(ch["img"].shape, dtype=np.uint16)
 
             if rois:
 
@@ -388,11 +403,11 @@ class AnnotationManager(QWidget):
                     shapes=rois,
                     start_idx=1,
                 )
-                self.imgs[fn]["data"][cn_data]["msk"] = msk.astype(np.uint16)
+                ch["msk"] = msk.astype(np.uint16)
 
             else:
 
-                self.imgs[fn]["data"][cn_data]["msk"] = empty_msk
+                ch["msk"] = empty_msk
 
     # %% Message ----
 
