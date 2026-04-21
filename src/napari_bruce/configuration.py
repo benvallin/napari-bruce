@@ -329,7 +329,7 @@ def make_default_config() -> dict:
                 "name": "TH",
                 "low_pct": 0.05,
                 "high_pct": 99.95,
-                "stardist_model": "2026.04.21_stardist_th_cam",
+                "stardist_model": "stardist_th",
                 "min_area_um2": 100,
                 "color": "purple",
             },
@@ -337,7 +337,7 @@ def make_default_config() -> dict:
                 "name": "pSyn",
                 "low_pct": 0.05,
                 "high_pct": 99.9999,
-                "stardist_model": "2026.04.21_stardist_psyn_cam",
+                "stardist_model": "stardist_psyn",
                 "min_area_um2": 50,
                 "color": "cyan",
             },
@@ -490,7 +490,7 @@ def add_stardist_model(src: str) -> None:
 
     out_dir_path = os.path.join(
         os.path.join(importlib.resources.files("napari_bruce"), "stardist_models"),
-        Path(in_dir_path).stem,
+        Path(in_dir_path).name,
     )
 
     shutil.copytree(
