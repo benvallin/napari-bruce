@@ -52,8 +52,8 @@ def list_stardist_models() -> dict:
 
         tmp = [i for i in user_models_dir.iterdir() if i.is_dir()]
 
-        tmp = {i.stem: [j.name for j in i.iterdir()] for i in tmp}
-
+        tmp = {Path(i).name: [j.name for j in i.iterdir()] for i in tmp}
+        
         tmp = [
             k
             for k, v in tmp.items()
@@ -329,7 +329,7 @@ def make_default_config() -> dict:
                 "name": "TH",
                 "low_pct": 0.05,
                 "high_pct": 99.95,
-                "stardist_model": "stardist_th",
+                "stardist_model": "2026.04.21_stardist_th_cam",
                 "min_area_um2": 100,
                 "color": "purple",
             },
@@ -337,7 +337,7 @@ def make_default_config() -> dict:
                 "name": "pSyn",
                 "low_pct": 0.05,
                 "high_pct": 99.9999,
-                "stardist_model": "stardist_psyn",
+                "stardist_model": "2026.04.21_stardist_psyn_cam",
                 "min_area_um2": 50,
                 "color": "cyan",
             },
