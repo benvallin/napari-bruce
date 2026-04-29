@@ -1432,8 +1432,8 @@ class PluginManager(QWidget):
                     self.ui.btn_overlap_filter,
                     self.ui.box_elem_ch0pos_ch1neg,
                     self.ui.box_elem_ch0pos_ch1pos,
-                    self.ui.box_elem_ch0pos_ch1amb,
                     self.ui.box_elem_ch1pos_ch0neg,
+                    self.ui.box_elem_ch0pos_ch1amb,
                     self.ui.box_elem_ch1pos_ch0amb,
                     self.ui.btn_save,
                 ],
@@ -1892,6 +1892,7 @@ class PluginManager(QWidget):
             summary_key="summary",
             cnts_key="cnts",
             submsks_area_um2_key="submsks_area_um2",
+            pop_order=tuple(self.config["elements"].keys()),
         )
 
         with open(Path(out_dir_path, "elem_list.txt"), "w") as f:
@@ -1937,16 +1938,16 @@ class PluginManager(QWidget):
         population = [
             "ch0-pos/ch1-neg",
             "ch0-pos/ch1-pos",
-            "ch0-pos/ch1-amb",
             "ch1-pos/ch0-neg",
+            "ch0-pos/ch1-amb",
             "ch1-pos/ch0-amb",
         ]
 
         box = [
             self.ui.box_elem_ch0pos_ch1neg,
             self.ui.box_elem_ch0pos_ch1pos,
-            self.ui.box_elem_ch0pos_ch1amb,
             self.ui.box_elem_ch1pos_ch0neg,
+            self.ui.box_elem_ch0pos_ch1amb,
             self.ui.box_elem_ch1pos_ch0amb,
         ]
 

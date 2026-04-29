@@ -53,7 +53,7 @@ def list_stardist_models() -> dict:
         tmp = [i for i in user_models_dir.iterdir() if i.is_dir()]
 
         tmp = {Path(i).name: [j.name for j in i.iterdir()] for i in tmp}
-        
+
         tmp = [
             k
             for k, v in tmp.items()
@@ -114,7 +114,7 @@ def list_tube_ids() -> list:
 
     """
 
-    output = [""] + [f"Tube {i}" for i in list(range(1, 9))]
+    output = ["manual"] + [f"Tube {i}" for i in list(range(1, 9))]
 
     return output
 
@@ -352,28 +352,28 @@ def make_default_config() -> dict:
                 "tube_id": "Tube 1",
             },
             "ch0-pos/ch1-pos": {
-                "color": "green",
+                "color": "yellow",
                 "collect": True,
                 "laser_function": "RoboLPC",
                 "tube_id": "Tube 2",
             },
-            "ch0-pos/ch1-amb": {
-                "color": "yellow",
-                "collect": False,
+            "ch1-pos/ch0-neg": {
+                "color": "cyan",
+                "collect": True,
                 "laser_function": "RoboLPC",
                 "tube_id": "Tube 3",
             },
-            "ch1-pos/ch0-neg": {
-                "color": "cyan",
+            "ch0-pos/ch1-amb": {
+                "color": "darkred",
                 "collect": False,
                 "laser_function": "RoboLPC",
-                "tube_id": "Tube 4",
+                "tube_id": "manual",
             },
             "ch1-pos/ch0-amb": {
-                "color": "gray",
+                "color": "grey",
                 "collect": False,
                 "laser_function": "RoboLPC",
-                "tube_id": "Tube 5",
+                "tube_id": "manual",
             },
         },
         "channels_annotation": {
