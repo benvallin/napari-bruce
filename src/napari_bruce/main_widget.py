@@ -1402,20 +1402,20 @@ class PluginManager(QWidget):
                 lambda x: self.on_elem_params_changed("ch0-pos/ch1-pos", x)
             )
 
-            self.ui.box_elem_ch0pos_ch1amb = ElementConfigBox(
-                label=f"{self.workflow.ch_names[0]}{plus} / {self.workflow.ch_names[1]}-amb"
-            )
-
-            self.ui.box_elem_ch0pos_ch1amb.valueChanged.connect(
-                lambda x: self.on_elem_params_changed("ch0-pos/ch1-amb", x)
-            )
-
             self.ui.box_elem_ch1pos_ch0neg = ElementConfigBox(
                 label=f"{self.workflow.ch_names[1]}{plus} / {self.workflow.ch_names[0]}{minus}"
             )
 
             self.ui.box_elem_ch1pos_ch0neg.valueChanged.connect(
                 lambda x: self.on_elem_params_changed("ch1-pos/ch0-neg", x)
+            )
+
+            self.ui.box_elem_ch0pos_ch1amb = ElementConfigBox(
+                label=f"{self.workflow.ch_names[0]}{plus} / {self.workflow.ch_names[1]}-amb"
+            )
+
+            self.ui.box_elem_ch0pos_ch1amb.valueChanged.connect(
+                lambda x: self.on_elem_params_changed("ch0-pos/ch1-amb", x)
             )
 
             self.ui.box_elem_ch1pos_ch0amb = ElementConfigBox(
@@ -1426,17 +1426,23 @@ class PluginManager(QWidget):
                 lambda x: self.on_elem_params_changed("ch1-pos/ch0-amb", x)
             )
 
+            box_elem_dict = {
+                "ch0-pos/ch1-neg": self.ui.box_elem_ch0pos_ch1neg,
+                "ch0-pos/ch1-pos": self.ui.box_elem_ch0pos_ch1pos,
+                "ch1-pos/ch0-neg": self.ui.box_elem_ch1pos_ch0neg,
+                "ch0-pos/ch1-amb": self.ui.box_elem_ch0pos_ch1amb,
+                "ch1-pos/ch0-amb": self.ui.box_elem_ch1pos_ch0amb,
+            }
+
+            box_elem_list = [
+                box_elem_dict[k]
+                for k in self.config["elements"].keys()
+                if k in box_elem_dict.keys()
+            ]
+
             for i, j in zip(
                 [2, 3, 4, 5, 6, 7, 8],
-                [
-                    self.ui.btn_overlap_filter,
-                    self.ui.box_elem_ch0pos_ch1neg,
-                    self.ui.box_elem_ch0pos_ch1pos,
-                    self.ui.box_elem_ch1pos_ch0neg,
-                    self.ui.box_elem_ch0pos_ch1amb,
-                    self.ui.box_elem_ch1pos_ch0amb,
-                    self.ui.btn_save,
-                ],
+                [self.ui.btn_overlap_filter] + box_elem_list + [self.ui.btn_save],
             ):
 
                 self.layout.insertWidget(i, j)
@@ -1449,8 +1455,8 @@ class PluginManager(QWidget):
             self.ui.btn_overlap_filter,
             self.ui.box_elem_ch0pos_ch1neg,
             self.ui.box_elem_ch0pos_ch1pos,
-            self.ui.box_elem_ch0pos_ch1amb,
             self.ui.box_elem_ch1pos_ch0neg,
+            self.ui.box_elem_ch0pos_ch1amb,
             self.ui.box_elem_ch1pos_ch0amb,
             self.ui.btn_save,
             self.ui.btn_clear,
@@ -1931,9 +1937,9 @@ class PluginManager(QWidget):
 
     def update_elem_boxes(self):
 
-        primary_channel_id = [0, 0, 0, 1, 1]
+        primary_channel_id = [0, 0, 1, 0, 1]
 
-        secondary_channel_status = ["neg", "pos", "amb", "neg", "amb"]
+        secondary_channel_status = ["neg", "pos", "neg", "amb", "amb"]
 
         population = [
             "ch0-pos/ch1-neg",
@@ -1992,15 +1998,15 @@ class PluginManager(QWidget):
 
     def read_elem_boxes(self):
 
-        primary_channel_id = [0, 0, 0, 1, 1]
+        primary_channel_id = [0, 0, 1, 0, 1]
 
-        secondary_channel_status = ["neg", "pos", "amb", "neg", "amb"]
+        secondary_channel_status = ["neg", "pos", "neg", "amb", "amb"]
 
         box = [
             self.ui.box_elem_ch0pos_ch1neg,
             self.ui.box_elem_ch0pos_ch1pos,
-            self.ui.box_elem_ch0pos_ch1amb,
             self.ui.box_elem_ch1pos_ch0neg,
+            self.ui.box_elem_ch0pos_ch1amb,
             self.ui.box_elem_ch1pos_ch0amb,
         ]
 

@@ -1297,11 +1297,11 @@ Elements :\n
     ch1_nm = metadata_dict["channels"][1]["name"]
 
     populations = {
-        "ch0-pos/ch1-neg": (ch0_nm, "neg", f"{ch0_nm}-pos / {ch1_nm}-neg"),
-        "ch0-pos/ch1-pos": (ch0_nm, "pos", f"{ch0_nm}-pos / {ch1_nm}-pos"),
-        "ch1-pos/ch0-neg": (ch1_nm, "neg", f"{ch1_nm}-pos / {ch0_nm}-neg"),
-        "ch0-pos/ch1-amb": (ch0_nm, "amb", f"{ch0_nm}-pos / {ch1_nm}-amb"),
-        "ch1-pos/ch0-amb": (ch1_nm, "amb", f"{ch1_nm}-pos / {ch0_nm}-amb"),
+        "ch0-pos/ch1-neg": (ch0_nm, "neg", f"{ch0_nm}-pos/{ch1_nm}-neg"),
+        "ch0-pos/ch1-pos": (ch0_nm, "pos", f"{ch0_nm}-pos/{ch1_nm}-pos"),
+        "ch1-pos/ch0-neg": (ch1_nm, "neg", f"{ch1_nm}-pos/{ch0_nm}-neg"),
+        "ch0-pos/ch1-amb": (ch0_nm, "amb", f"{ch0_nm}-pos/{ch1_nm}-amb"),
+        "ch1-pos/ch0-amb": (ch1_nm, "amb", f"{ch1_nm}-pos/{ch0_nm}-amb"),
     }
 
     populations = {k: populations[k] for k in pop_order if k in populations} | {
