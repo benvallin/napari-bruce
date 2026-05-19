@@ -120,7 +120,7 @@ Available commands:
 # Construct an image set from 2-channel .zvi files located at <IN_DIR> and save to <OUT_DIR>/imgs.pkl
 bruce --zvi-to-dict <IN_DIR> <OUT_DIR>
 
-# Open the annotation GUI to label the image set at <IN_DIR>/imgs.pkl (or <IN_DIR>/imgs_annotated.pkl if exists) and save image/mask pairs to <OUT_DIR>/imgs_annotated.pkl
+# Open the annotation GUI to label the image set at <IN_DIR>/imgs.pkl and save image/mask pairs to <OUT_DIR>/imgs_annotated.pkl
 bruce --annotate <IN_DIR> <OUT_DIR>
 ```
 
