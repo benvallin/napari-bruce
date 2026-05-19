@@ -209,7 +209,7 @@ def cli_main(argv: list[str] | None = None) -> None:
             "--zvi-to-dict",
             nargs=2,
             metavar=("IN_DIR", "OUT_DIR"),
-            help="batch-process 2-channel .zvi files located at IN_DIR and save imgs.pkl at OUT_DIR",
+            help="construct an image set from 2-channel .zvi files located at IN_DIR and save to OUT_DIR/imgs.pkl",
         )
 
         parser.add_argument(
@@ -228,7 +228,7 @@ def cli_main(argv: list[str] | None = None) -> None:
             "--annotate",
             nargs=2,
             metavar=("IN_DIR", "OUT_DIR"),
-            help="open the annotation GUI to label images from IN_DIR/imgs.pkl (or IN_DIR/imgs_annotated.pkl if exists) and save to OUT_DIR/imgs_annotated.pkl",
+            help="open the annotation GUI to label the image set at IN_DIR/imgs.pkl (or IN_DIR/imgs_annotated.pkl if exists) and save image/mask pairs to OUT_DIR/imgs_annotated.pkl",
         )
 
         parser.add_argument(
@@ -408,8 +408,7 @@ def cli_main(argv: list[str] | None = None) -> None:
 
         if args.version:
 
-            print(
-                r"""
+            print(r"""
         '            '
      /*/    '   '    \*\
    /**/     |\_/|     \**\
@@ -420,8 +419,7 @@ def cli_main(argv: list[str] | None = None) -> None:
     \*\    \*****/    /*/
       \\     \*/     //
         '     '     '
-        """
-            )
+        """)
 
             print(f"napari-bruce {configuration.get_version()}\n")
 

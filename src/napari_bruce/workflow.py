@@ -1067,188 +1067,6 @@ def format_elem_cnt(
 # %% make_elem_txt() ----
 
 
-# def make_elem_txt(
-#     data_dict: dict,
-#     metadata_dict: dict,
-#     config_dict: dict,
-#     summary_key: str = "summary",
-#     cnts_key: str = "cnts",
-#     submsks_area_um2_key: str = "submsks_area_um2",
-# ) -> str:
-#     """Create string with PALM element properties.
-
-#     Args:
-#       data_dict (dict): dict of image data.
-#       metadata_dict (dict): dict of image metadata.
-#       config_dict (dict): dict of configuration parameters.
-
-#     Returns:
-#       str: string with PALM element properties to be written to .txt file.
-
-#     """
-
-#     import pandas as pd
-
-#     date_time = datetime.now().strftime(f"%d.%m.%Y\t%H:%M:%S")
-
-#     header = f"""PALMRobo Elements
-# Version:	V 4.9.0.0
-# Date, Time :	{date_time}
-
-# MICROMETER
-# Elements :\n
-# """
-
-#     objective = f"{int(metadata_dict['objectives']['nominal_magnification'])}X"
-
-#     ch0_nm = metadata_dict["channels"][0]["name"]
-#     ch1_nm = metadata_dict["channels"][1]["name"]
-
-#     n = [
-#         data_dict[k1][summary_key][k2]
-#         for k1, k2 in zip(
-#             [ch0_nm, ch0_nm, ch0_nm, ch1_nm, ch1_nm],
-#             ["neg", "pos", "amb", "neg", "amb"],
-#         )
-#     ]
-
-#     n_collect = [
-#         data_dict[k1][summary_key][k2]
-#         for k1, k2 in zip(
-#             [ch0_nm, ch0_nm, ch0_nm, ch1_nm, ch1_nm],
-#             ["neg_collect", "pos_collect", "amb_collect", "neg_collect", "amb_collect"],
-#         )
-#     ]
-
-#     # population = [
-#     #   f'{ch0_nm}-pos / {ch1_nm}-neg',
-#     #   f'{ch0_nm}-pos / {ch1_nm}-pos',
-#     #   f'{ch0_nm}-pos / {ch1_nm}-amb',
-#     #   f'{ch1_nm}-pos / {ch0_nm}-neg',
-#     #   f'{ch1_nm}-pos / {ch0_nm}-amb'
-#     #   ]
-
-#     # name = [[f'{i} #{x+1}' for x in range(j)] for i, j in zip(population, n)]
-
-#     # name = list(chain.from_iterable(name))
-
-#     cnt = [
-#         [x for x in data_dict[k1][cnts_key][k2].values()]
-#         for k1, k2 in zip(
-#             [ch0_nm, ch0_nm, ch0_nm, ch1_nm, ch1_nm],
-#             ["neg", "pos", "amb", "neg", "amb"],
-#         )
-#     ]
-
-#     cnt = list(chain.from_iterable(cnt))
-
-#     ids = [
-#         [x for x in data_dict[k1][cnts_key][k2].keys()]
-#         for k1, k2 in zip(
-#             [ch0_nm, ch0_nm, ch0_nm, ch1_nm, ch1_nm],
-#             ["neg", "pos", "amb", "neg", "amb"],
-#         )
-#     ]
-
-#     area = [
-#         {k: v for k, v in data_dict[x][submsks_area_um2_key].items()}
-#         for x in [ch0_nm, ch0_nm, ch0_nm, ch1_nm, ch1_nm]
-#     ]
-
-#     area = [[x[i] for i in y] for x, y in zip(area, ids)]
-
-#     area = list(chain.from_iterable(area))
-
-#     area = np.round(area, 1)
-
-#     color = [
-#         config_dict["elements"][k]["color"]
-#         for k in [
-#             "ch0-pos/ch1-neg",
-#             "ch0-pos/ch1-pos",
-#             "ch0-pos/ch1-amb",
-#             "ch1-pos/ch0-neg",
-#             "ch1-pos/ch0-amb",
-#         ]
-#     ]
-
-#     color = [[i for x in range(j)] for i, j in zip(color, n)]
-
-#     color = list(chain.from_iterable(color))
-
-#     laser_function = [
-#         data_dict[k1][summary_key][k2]
-#         for k1, k2 in zip(
-#             [ch0_nm, ch0_nm, ch0_nm, ch1_nm, ch1_nm],
-#             [
-#                 "neg_laser_function",
-#                 "pos_laser_function",
-#                 "amb_laser_function",
-#                 "neg_laser_function",
-#                 "amb_laser_function",
-#             ],
-#         )
-#     ]
-
-#     laser_function = [
-#         [i for x in range(j)] + ["" for x in range(k - j)]
-#         for i, j, k in zip(laser_function, n_collect, n)
-#     ]
-
-#     laser_function = list(chain.from_iterable(laser_function))
-
-#     tube_id = [
-#         data_dict[k1][summary_key][k2]
-#         for k1, k2 in zip(
-#             [ch0_nm, ch0_nm, ch0_nm, ch1_nm, ch1_nm],
-#             ["neg_tube_id", "pos_tube_id", "amb_tube_id", "neg_tube_id", "amb_tube_id"],
-#         )
-#     ]
-
-#     tube_id = [
-#         [i for x in range(j)] + ["" for x in range(k - j)]
-#         for i, j, k in zip(tube_id, n_collect, n)
-#     ]
-
-#     tube_id = list(chain.from_iterable(tube_id))
-
-#     comment = [
-#         ["COLLECT" for x in range(i)] + ["OMIT" for x in range(j - i)]
-#         for i, j in zip(n_collect, n)
-#     ]
-
-#     comment = list(chain.from_iterable(comment))
-
-#     output = []
-
-#     for i, (j, k, l, m, n, o) in enumerate(
-#         zip(cnt, color, laser_function, tube_id, area, comment)
-#     ):
-
-#         tmp = scale_elem_cnt(elem_cnt=j, metadata_dict=metadata_dict, to="PALM")
-
-#         tmp = format_elem_cnt(
-#             elem_cnt=tmp,
-#             id=i + 1,
-#             color=k,
-#             laser_fun=l,
-#             destination=m,
-#             area=n,
-#             comment=o,
-#             objective=objective,
-#         )
-
-#         output.append(tmp)
-
-#     output = pd.concat(output)
-
-#     output = output.to_csv(index=False, sep="\t")
-
-#     output = header + output + "\n\n\n"
-
-#     return output
-
-
 def make_elem_txt(
     data_dict: dict,
     metadata_dict: dict,
@@ -1263,7 +1081,7 @@ def make_elem_txt(
         "ch0-pos/ch1-amb",
         "ch1-pos/ch0-amb",
     ),
-) -> str:
+) -> dict:
     """Create string with PALM element properties.
 
     Args:
@@ -1275,7 +1093,7 @@ def make_elem_txt(
       pop_order (tuple) = names of populations in desired order.
 
     Returns:
-      str: string with PALM element properties to be written to .txt file.
+      dict: dict of string objects ("all", "collect", "omit") with PALM element properties to be written to .txt file.
 
     """
 
@@ -1349,10 +1167,11 @@ Elements :\n
         for k1, k2, _ in populations.values()
     ]
 
-    laser_function = [
-        [i for x in range(j)] + ["" for x in range(k - j)]
-        for i, j, k in zip(laser_function, n_collect, n)
-    ]
+    # laser_function = [
+    #     [i for x in range(j)] + ["-" for x in range(k - j)]
+    #     for i, j, k in zip(laser_function, n_collect, n)
+    # ]
+    laser_function = [[i for x in range(j)] for i, j in zip(laser_function, n)]
 
     laser_function = list(chain.from_iterable(laser_function))
 
@@ -1361,10 +1180,11 @@ Elements :\n
         for k1, k2, _ in populations.values()
     ]
 
-    tube_id = [
-        [i for x in range(j)] + ["manual" for x in range(k - j)]
-        for i, j, k in zip(tube_id, n_collect, n)
-    ]
+    # tube_id = [
+    #     [i for x in range(j)] + ["-" for x in range(k - j)]
+    #     for i, j, k in zip(tube_id, n_collect, n)
+    # ]
+    tube_id = [[i for x in range(j)] for i, j in zip(tube_id, n)]
 
     tube_id = list(chain.from_iterable(tube_id))
 
@@ -1383,38 +1203,52 @@ Elements :\n
 
     collect = list(chain.from_iterable(collect))
 
-    combined = list(zip(cnt, color, laser_function, tube_id, area, comment, collect))
+    rois = list(zip(cnt, color, laser_function, tube_id, area, comment, collect))
+    
+    rois_collect = [i for i in rois if i[6] is True]
+    rois_omit = [i for i in rois if i[6] is False]
+    
+    if len(rois_omit) == 0:
+        
+        nm_list = ["collect"]
+        val_list = [rois_collect]
+      
+    else:
+        
+        rois_all = rois_collect + rois_omit
+        nm_list = ["collect", "omit", "all"]
+        val_list = [rois_collect, rois_omit, rois_all]
 
-    combined = [
-        [i for i in combined if i[6] is True] + [i for i in combined if i[6] is False]
-    ]
+    output = {}
 
-    combined = list(chain.from_iterable(combined))
+    for nm, val in zip(nm_list, val_list):
+              
+        res = []
 
-    output = []
+        for i, (j, k, l, m, n, o, _) in enumerate(val):
 
-    for i, (j, k, l, m, n, o, _) in enumerate(combined):
+            tmp = scale_elem_cnt(elem_cnt=j, metadata_dict=metadata_dict, to="PALM")
 
-        tmp = scale_elem_cnt(elem_cnt=j, metadata_dict=metadata_dict, to="PALM")
+            tmp = format_elem_cnt(
+                elem_cnt=tmp,
+                id=i + 1 if nm in ["collect", "all"] else i + 1 + len(rois_collect),
+                color=k,
+                laser_fun=l,
+                destination=m,
+                area=n,
+                comment=o,
+                objective=objective,
+            )
 
-        tmp = format_elem_cnt(
-            elem_cnt=tmp,
-            id=i + 1,
-            color=k,
-            laser_fun=l,
-            destination=m,
-            area=n,
-            comment=o,
-            objective=objective,
-        )
+            res.append(tmp)
 
-        output.append(tmp)
+        res = pd.concat(res)
 
-    output = pd.concat(output)
+        res = res.to_csv(index=False, sep="\t")
 
-    output = output.to_csv(index=False, sep="\t")
+        res = header + res + "\n\n\n"
 
-    output = header + output + "\n\n\n"
+        output[nm] = res
 
     return output
 
@@ -1495,7 +1329,7 @@ def make_picklable(data: Any) -> Any:
 # %% pickle_data() ----
 
 
-def pickle_data(data: Any, filename: str) -> None:
+def pickle_data(data: Any, filename: str | Path) -> None:
     """Make an object pickle-able and write it to pickle file.
 
     Args:

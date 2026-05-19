@@ -88,7 +88,6 @@ def list_laser_functions() -> list:
     """
 
     output = [
-        "",
         "Cut",
         "JointCut",
         "CloseCut",

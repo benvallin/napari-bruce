@@ -28,6 +28,7 @@ from qtpy.QtWidgets import (
     QComboBox,
 )
 from qtpy.QtCore import Signal, QObject, QThread, Qt
+from qtpy.QtGui import QColor
 from . import configuration
 from . import workflow
 
@@ -741,6 +742,31 @@ class OverlapWorker(BaseWorker):
         return output
 
 
+# %% _make_color_overlay_delegate() ----
+
+
+def _make_color_overlay_delegate(base_cls):
+    class _ColorOverlayDelegate(base_cls):
+        def __init__(self, layer_colors):
+            super().__init__()
+            self._layer_colors = layer_colors  # {layer_name: QColor}
+
+        def initStyleOption(self, option, index):
+            super().initStyleOption(option, index)
+            option.displayAlignment = Qt.AlignLeft | Qt.AlignVCenter
+
+        def paint(self, painter, option, index):
+            super().paint(painter, option, index)
+            name = index.data(Qt.ItemDataRole.DisplayRole)
+            is_selected = bool(option.state & QStyle.State_Selected)
+            if name in self._layer_colors and not is_selected:
+                painter.save()
+                painter.fillRect(option.rect, self._layer_colors[name])
+                painter.restore()
+
+    return _ColorOverlayDelegate
+
+
 # %% PluginManager() ----
 
 
@@ -766,6 +792,8 @@ class PluginManager(QWidget):
 
         self.init_viewer_layers()
 
+        self._install_layer_colors()
+
         message = f"""Loading StarDist models...
     
     Channel 0: {self.config['channels'][0]['stardist_model']}
@@ -781,6 +809,43 @@ class PluginManager(QWidget):
             thread_attr_name="_load_model_worker_thread",
             worker_attr_name="_load_model_worker",
         )
+
+    def _install_layer_colors(self):
+        qt_list = next(
+            (
+                w
+                for w in QApplication.instance().allWidgets()
+                if type(w).__name__ == "QtLayerList"
+            ),
+            None,
+        )
+        if qt_list is None:
+            return
+
+        DelegateClass = _make_color_overlay_delegate(type(qt_list.itemDelegate()))
+        self._layer_delegate = DelegateClass(self._build_layer_colors())
+        qt_list.setItemDelegate(self._layer_delegate)
+        if hasattr(self._layer_delegate, "loading_frame_changed"):
+            self._layer_delegate.loading_frame_changed.connect(
+                qt_list.viewport().update
+            )
+
+        for i in [0, 1]:
+            for key in ("image", "labels", "shapes"):
+                self.layers[i][key].events.name.connect(self._refresh_layer_colors)
+
+    def _build_layer_colors(self):
+        layer_colors = {}
+        for i in [0, 1]:
+            qcolor = QColor(self.config["channels"][i]["color"])
+            qcolor.setAlpha(30)
+            for key in ("image", "labels", "shapes"):
+                layer_colors[self.layers[i][key].name] = qcolor
+        return layer_colors
+
+    def _refresh_layer_colors(self, _event=None):
+        if hasattr(self, "_layer_delegate"):
+            self._layer_delegate._layer_colors = self._build_layer_colors()
 
     def closeEvent(self, event):
 
@@ -922,7 +987,7 @@ class PluginManager(QWidget):
                 self.layers[i] = {}
 
                 self.layers[i]["image"] = self.viewer.add_image(
-                    image_array, name=f"ch{i} normalized image", visible=False
+                    image_array, name=f"\u25CE ch{i} image", visible=False
                 )
 
             for i in [0, 1]:
@@ -934,7 +999,7 @@ class PluginManager(QWidget):
 
                 self.layers[i]["labels"] = self.viewer.add_labels(
                     label_array,
-                    name=f"ch{i} - remove",
+                    name=f"\u2718 ch{i} masks",
                     opacity=0.4,
                     colormap=color_dict,
                     visible=True,
@@ -943,13 +1008,13 @@ class PluginManager(QWidget):
 
                 self.layers[i]["labels"].visible = False
                 self.layers[i]["labels"].contrast_limits = (0, 65535)
-                self.layers[i]["labels"].brush_size = 60
+                self.layers[i]["labels"].brush_size = 80
 
             for i in [0, 1]:
 
                 self.layers[i]["shapes"] = self.viewer.add_shapes(
                     data=[],
-                    name=f"ch{i} - add",
+                    name=f"\u25b6 add ch{i}",
                     shape_type="path",
                     edge_color=self.config["channels"][i]["color"],
                     edge_width=6,
@@ -971,19 +1036,19 @@ class PluginManager(QWidget):
             for i in [0, 1]:
 
                 self.layers[i]["image"].data = image_array
-                self.layers[i]["image"].name = f"ch{i} normalized image"
+                self.layers[i]["image"].name = f"\u25CE ch{i} image"
 
                 self.layers[i]["labels"].visible = False
                 self.layers[i]["labels"].data = label_array
-                self.layers[i]["labels"].name = f"ch{i} - remove"
+                self.layers[i]["labels"].name = f"\u2718 ch{i} masks"
                 self.layers[i]["labels"].contour = 0
                 self.layers[i]["labels"].opacity = 0.4
                 self.layers[i]["labels"].contrast_limits = (0, 65535)
-                self.layers[i]["labels"].brush_size = 60
+                self.layers[i]["labels"].brush_size = 80
 
                 self.layers[i]["shapes"].visible = False
                 self.layers[i]["shapes"].data = []
-                self.layers[i]["shapes"].name = f"ch{i} - add"
+                self.layers[i]["shapes"].name = f"\u25b6 add ch{i}"
                 self.layers[i]["shapes"].edge_color = self.config["channels"][i][
                     "color"
                 ]
@@ -1506,11 +1571,11 @@ class PluginManager(QWidget):
             for k, v in self.workflow.ch_names.items():
 
                 self.layers[k]["image"].data = self.workflow.data[v]["norm_img"]
-                self.layers[k]["image"].name = f"{v} normalized image"
+                self.layers[k]["image"].name = f"\u25CE {v} image"
 
-                self.layers[k]["labels"].name = f"{v} - remove"
+                self.layers[k]["labels"].name = f"\u2718 {v} masks"
 
-                self.layers[k]["shapes"].name = f"{v} - add"
+                self.layers[k]["shapes"].name = f"\u25b6 add {v}"
 
             self.layers["merge"].data = np.zeros(
                 self.workflow.data[self.workflow.ch_names[0]]["norm_img"].shape + (3,),
@@ -1890,7 +1955,7 @@ class PluginManager(QWidget):
             self.workflow.metadata["img_nm"],
         )
 
-        # Construct element list and write to file
+        # Construct element lists and write to file
         self.elem_list = workflow.make_elem_txt(
             data_dict=self.workflow.data,
             metadata_dict=self.workflow.metadata,
@@ -1901,8 +1966,10 @@ class PluginManager(QWidget):
             pop_order=tuple(self.config["elements"].keys()),
         )
 
-        with open(Path(out_dir_path, "elem_list.txt"), "w") as f:
-            f.write(self.elem_list)
+        for k in self.elem_list.keys():
+
+            with open(Path(out_dir_path, f"elem_list_{k}.txt"), "w") as f:
+                f.write(self.elem_list[k])
 
         # Write data and metadata to file
         workflow.pickle_data(
@@ -1962,15 +2029,21 @@ class PluginManager(QWidget):
         ):
 
             max_n_collect = self.workflow.data[self.workflow.ch_names[i]]["summary"][j]
+
             n_collect = (
                 max_n_collect if self.config["elements"][k]["collect"] is True else 0
             )
-            laser_function = (
-                self.config["elements"][k]["laser_function"]
-                if max_n_collect > 0
-                else ""
-            )
-            tube_id = self.config["elements"][k]["tube_id"] if max_n_collect > 0 else ""
+
+            # laser_function = (
+            #     self.config["elements"][k]["laser_function"]
+            #     if max_n_collect > 0
+            #     else ""
+            # )
+            laser_function = self.config["elements"][k]["laser_function"]
+
+            # tube_id = self.config["elements"][k]["tube_id"] if max_n_collect > 0 else ""
+            tube_id = self.config["elements"][k]["tube_id"]
+
             color = self.config["elements"][k]["color"]
 
             if l is not None:

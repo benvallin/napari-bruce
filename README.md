@@ -40,7 +40,6 @@ Bruce requires a **platform-specific Conda environment** due to differences in n
 |-------------------------|--------------------------------------|
 | Windows (native)        | `env/bruce-env_windows_native.yml`   |
 | macOS (Apple Silicon)   | `env/bruce-env_macos_arm.yml`        |
-| Linux                   | `env/bruce-env_linux.yml`            |
 ```
 
 Open a terminal and run:
@@ -60,6 +59,9 @@ bruce
 
 # Or launch Bruce directly from napari
 napari --with napari-bruce
+
+# Show help
+bruce -h
 ```
 
 
@@ -70,7 +72,7 @@ napari --with napari-bruce
 
 Bruce stores its configuration in a user-specific JSON file.
 
-Useful commands:
+Available commands:
 
 ```bash
 # Show config file path
@@ -91,7 +93,7 @@ bruce --reset-config
 
 Bruce runs StarDist predictions on the GPU when visible to TensorFlow, and supports user-defined StarDist models.
 
-Useful commands:
+Available commands:
 
 ```bash
 # Check whether GPU(s) are visible to TensorFlow
@@ -100,8 +102,26 @@ bruce --gpu-status
 # List available StarDist models
 bruce --list-models
 
-# Add a user-defined StarDist model (replace <MODEL_DIR> with the model directory)
+# Add a user-defined StarDist model located at <MODEL_DIR>
 bruce --add-model <MODEL_DIR>
+```
+
+
+---
+
+
+## Image annotation for model training 
+
+Bruce comes with a dedicated GUI to annotate 2-channel images produced by PALMRobo 4.9.
+
+Available commands:
+
+```bash
+# Construct an image set from 2-channel .zvi files located at <IN_DIR> and save to <OUT_DIR>/imgs.pkl
+bruce --zvi-to-dict <IN_DIR> <OUT_DIR>
+
+# Open the annotation GUI to label the image set at <IN_DIR>/imgs.pkl (or <IN_DIR>/imgs_annotated.pkl if exists) and save image/mask pairs to <OUT_DIR>/imgs_annotated.pkl
+bruce --annotate <IN_DIR> <OUT_DIR>
 ```
 
 
