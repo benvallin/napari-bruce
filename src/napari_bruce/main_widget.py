@@ -987,7 +987,7 @@ class PluginManager(QWidget):
                 self.layers[i] = {}
 
                 self.layers[i]["image"] = self.viewer.add_image(
-                    image_array, name=f"\u25CE ch{i} image", visible=False
+                    image_array, name=f"\u25ce ch{i} image", visible=False
                 )
 
             for i in [0, 1]:
@@ -1036,7 +1036,7 @@ class PluginManager(QWidget):
             for i in [0, 1]:
 
                 self.layers[i]["image"].data = image_array
-                self.layers[i]["image"].name = f"\u25CE ch{i} image"
+                self.layers[i]["image"].name = f"\u25ce ch{i} image"
 
                 self.layers[i]["labels"].visible = False
                 self.layers[i]["labels"].data = label_array
@@ -1571,7 +1571,7 @@ class PluginManager(QWidget):
             for k, v in self.workflow.ch_names.items():
 
                 self.layers[k]["image"].data = self.workflow.data[v]["norm_img"]
-                self.layers[k]["image"].name = f"\u25CE {v} image"
+                self.layers[k]["image"].name = f"\u25ce {v} image"
 
                 self.layers[k]["labels"].name = f"\u2718 {v} masks"
 
@@ -1989,6 +1989,34 @@ class PluginManager(QWidget):
             f"Results saved at:\n{self.config['out_dir_path']}\n\nIn subfolder:\n{self.workflow.metadata['img_nm']}",
             MessageLevel.SAVE,
         )
+
+        ch0_nm = self.workflow.ch_names[0]
+        ch1_nm = self.workflow.ch_names[1]
+        ch0_summary = self.workflow.data[ch0_nm]['summary']
+        ch1_summary = self.workflow.data[ch1_nm]['summary']
+        plus = "\u207a"
+        minus = "\u207b"
+
+        summary_dict = {
+            "ch0-pos/ch1-neg": f"- {ch0_nm}{plus} / {ch1_nm}{minus}: {ch0_summary['neg_collect']} / {ch0_summary['neg']}",
+            "ch0-pos/ch1-pos": f"- {ch0_nm}{plus} / {ch1_nm}{plus}: {ch0_summary['pos_collect']} / {ch0_summary['pos']}",
+            "ch1-pos/ch0-neg": f"- {ch1_nm}{plus} / {ch1_nm}{minus}: {ch1_summary['neg_collect']} / {ch1_summary['neg']}",
+            "ch0-pos/ch1-amb": f"- {ch0_nm}{plus} / {ch1_nm}-amb: {ch0_summary['amb_collect']} / {ch0_summary['amb']}",
+            "ch1-pos/ch0-amb": f"- {ch1_nm}{plus} / {ch1_nm}-amb: {ch1_summary['amb_collect']} / {ch1_summary['amb']}",
+        }
+
+        summary_dict = {
+            k: summary_dict[k]
+            for k in self.config["elements"].keys()
+            if k in summary_dict.keys()
+        }
+        
+        print(f"Collect / omit summary - {self.workflow.metadata['img_nm']}:\n")
+
+        for k in summary_dict.keys():
+            print(summary_dict[k])
+        
+        print("\n")
 
     def on_min_area_changed(self, key: int, value: float):
 
