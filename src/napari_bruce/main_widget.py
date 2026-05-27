@@ -1998,11 +1998,11 @@ class PluginManager(QWidget):
         minus = "\u207b"
 
         summary_dict = {
-            "ch0-pos/ch1-neg": f"- {ch0_nm}{plus} / {ch1_nm}{minus}: {ch0_summary['neg_collect']} / {ch0_summary['neg']}",
-            "ch0-pos/ch1-pos": f"- {ch0_nm}{plus} / {ch1_nm}{plus}: {ch0_summary['pos_collect']} / {ch0_summary['pos']}",
-            "ch1-pos/ch0-neg": f"- {ch1_nm}{plus} / {ch1_nm}{minus}: {ch1_summary['neg_collect']} / {ch1_summary['neg']}",
-            "ch0-pos/ch1-amb": f"- {ch0_nm}{plus} / {ch1_nm}-amb: {ch0_summary['amb_collect']} / {ch0_summary['amb']}",
-            "ch1-pos/ch0-amb": f"- {ch1_nm}{plus} / {ch1_nm}-amb: {ch1_summary['amb_collect']} / {ch1_summary['amb']}",
+            "ch0-pos/ch1-neg": f"- {ch0_nm}{plus} / {ch1_nm}{minus}: {ch0_summary['neg_collect']} / {ch0_summary['neg']} ({ch0_summary['neg_tube_id']})",
+            "ch0-pos/ch1-pos": f"- {ch0_nm}{plus} / {ch1_nm}{plus}: {ch0_summary['pos_collect']} / {ch0_summary['pos']} ({ch0_summary['pos_tube_id']})",
+            "ch1-pos/ch0-neg": f"- {ch1_nm}{plus} / {ch1_nm}{minus}: {ch1_summary['neg_collect']} / {ch1_summary['neg']} ({ch1_summary['neg_tube_id']})",
+            "ch0-pos/ch1-amb": f"- {ch0_nm}{plus} / {ch1_nm}-amb: {ch0_summary['amb_collect']} / {ch0_summary['amb']} ({ch0_summary['amb_tube_id']})",
+            "ch1-pos/ch0-amb": f"- {ch1_nm}{plus} / {ch1_nm}-amb: {ch1_summary['amb_collect']} / {ch1_summary['amb']} ({ch1_summary['amb_tube_id']})",
         }
 
         summary_dict = {
