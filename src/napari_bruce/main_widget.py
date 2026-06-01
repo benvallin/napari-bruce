@@ -1304,6 +1304,10 @@ class PluginManager(QWidget):
             # ROI editing disabled
             elif state == ViewerState.LOCKED:
 
+                for k in [0, 1]:
+
+                    self.layers[k]["image"].visible = True
+
                 self.layers["merge"].visible = True
 
                 self.viewer.layers.selection.active = self.layers["merge"]
