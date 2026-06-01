@@ -761,9 +761,15 @@ class OverlapWorker(BaseWorker):
                     id_colors.append(rgba)
 
         output["cell_ids"] = {
-            "centroids": np.array(id_centroids, dtype=float) if id_centroids else np.zeros((0, 2)),
+            "centroids": (
+                np.array(id_centroids, dtype=float)
+                if id_centroids
+                else np.zeros((0, 2))
+            ),
             "labels": id_labels,
-            "colors": np.array(id_colors, dtype=float) if id_colors else np.zeros((0, 4)),
+            "colors": (
+                np.array(id_colors, dtype=float) if id_colors else np.zeros((0, 4))
+            ),
         }
 
         output["merge"] = {"merge_norm_img_status": merge_norm_img}
@@ -1105,7 +1111,7 @@ class PluginManager(QWidget):
                 self.layers[i]["labels"] = self.viewer.add_labels(
                     label_array,
                     name=f"\u2718 ch{i} masks",
-                    opacity=0.3,
+                    opacity=0.2,
                     colormap=color_dict,
                     visible=True,
                     rendering="iso_categorical",
@@ -1144,7 +1150,12 @@ class PluginManager(QWidget):
                     np.array([[0.0, 0.0]]),
                     size=0,
                     visible=False,
-                    text={"string": [" "], "size": 14, "color": "white", "visible": False},
+                    text={
+                        "string": [" "],
+                        "size": 14,
+                        "color": "white",
+                        "visible": False,
+                    },
                 )
                 self.viewer.layers.remove(_tmp)
             except Exception:
@@ -1167,7 +1178,7 @@ class PluginManager(QWidget):
                 self.layers[i]["labels"].data = label_array
                 self.layers[i]["labels"].name = f"\u2718 ch{i} masks"
                 self.layers[i]["labels"].contour = 0
-                self.layers[i]["labels"].opacity = 0.3
+                self.layers[i]["labels"].opacity = 0.2
                 self.layers[i]["labels"].contrast_limits = (0, 65535)
                 self.layers[i]["labels"].brush_size = 80
 
@@ -1807,7 +1818,12 @@ class PluginManager(QWidget):
                     old_layer = self.layers.get("cell_ids")
                     if old_layer is not None and old_layer in self.viewer.layers:
                         self.viewer.layers.remove(old_layer)
-                    add_kw = {"size": 0, "name": "ROI IDs", "visible": True, "text": text_dict}
+                    add_kw = {
+                        "size": 0,
+                        "name": "ROI IDs",
+                        "visible": True,
+                        "text": text_dict,
+                    }
                     try:
                         self.layers["cell_ids"] = self.viewer.add_points(pts, **add_kw)
                     except Exception:
@@ -1827,13 +1843,19 @@ class PluginManager(QWidget):
 
         layer = self.layers.get("cell_ids")
 
-        if layer is None or len(layer.data) == 0 or not getattr(layer, "visible", False):
+        if (
+            layer is None
+            or len(layer.data) == 0
+            or not getattr(layer, "visible", False)
+        ):
             return
 
         zoom = self.viewer.camera.zoom
 
         try:
-            layer.text.size = self._roi_id_base_text_size * (zoom / self._roi_id_ref_zoom)
+            layer.text.size = self._roi_id_base_text_size * (
+                zoom / self._roi_id_ref_zoom
+            )
         except Exception:
             pass
 
@@ -2200,7 +2222,9 @@ class PluginManager(QWidget):
             cnts_key="cnts",
             submsks_area_um2_key="submsks_area_um2",
             pop_order=tuple(self.config["elements"].keys()),
-            selected_ids_override=self._manual_selections if self._manual_selections else None,
+            selected_ids_override=(
+                self._manual_selections if self._manual_selections else None
+            ),
         )
 
         for k in self.elem_list.keys():
@@ -2229,8 +2253,8 @@ class PluginManager(QWidget):
 
         ch0_nm = self.workflow.ch_names[0]
         ch1_nm = self.workflow.ch_names[1]
-        ch0_summary = self.workflow.data[ch0_nm]['summary']
-        ch1_summary = self.workflow.data[ch1_nm]['summary']
+        ch0_summary = self.workflow.data[ch0_nm]["summary"]
+        ch1_summary = self.workflow.data[ch1_nm]["summary"]
         plus = "\u207a"
         minus = "\u207b"
 
@@ -2247,12 +2271,12 @@ class PluginManager(QWidget):
             for k in self.config["elements"].keys()
             if k in summary_dict.keys()
         }
-        
+
         print(f"Collect / omit summary - {self.workflow.metadata['img_nm']}:\n")
 
         for k in summary_dict.keys():
             print(summary_dict[k])
-        
+
         print("\n")
 
     def _get_elem_box(self, pop_key: str):
