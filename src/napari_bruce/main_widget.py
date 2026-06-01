@@ -1105,7 +1105,7 @@ class PluginManager(QWidget):
                 self.layers[i]["labels"] = self.viewer.add_labels(
                     label_array,
                     name=f"\u2718 ch{i} masks",
-                    opacity=0.4,
+                    opacity=0.3,
                     colormap=color_dict,
                     visible=True,
                     rendering="iso_categorical",
@@ -1167,7 +1167,7 @@ class PluginManager(QWidget):
                 self.layers[i]["labels"].data = label_array
                 self.layers[i]["labels"].name = f"\u2718 ch{i} masks"
                 self.layers[i]["labels"].contour = 0
-                self.layers[i]["labels"].opacity = 0.4
+                self.layers[i]["labels"].opacity = 0.3
                 self.layers[i]["labels"].contrast_limits = (0, 65535)
                 self.layers[i]["labels"].brush_size = 80
 
