@@ -64,45 +64,6 @@ def msk_to_cnts(msk: np.ndarray) -> dict:
 
     output = {}
 
-    try:
-        from scipy import ndimage
-    except Exception:
-        ndimage = None
-
-    if ndimage is not None:
-
-        # Single C-level pass to get each label's bounding box, then run findContours
-        # only on the small cropped region instead of scanning the full image once
-        # per cell (O(H*W + sum of bbox areas) instead of O(N * H*W)).
-        slices = ndimage.find_objects(msk)
-
-        for idx, sl in enumerate(slices):
-
-            if sl is None:
-
-                continue
-
-            label = idx + 1
-
-            sub = (msk[sl] == label).astype(np.uint8)
-
-            c = cv2.findContours(
-                sub, mode=cv2.RETR_EXTERNAL, method=cv2.CHAIN_APPROX_NONE
-            )
-
-            c = c[0][0].squeeze()
-
-            if len(c) > 2:
-
-                # Offset the contour from the crop back to full-image coordinates.
-                # cv2 contours are (x, y) = (col, row); slices are (row, col).
-                c = c + np.array([sl[1].start, sl[0].start])
-
-                output[label] = c
-
-        return output
-
-    # Fallback: per-cell full-image scan
     for i in np.unique(msk)[1:]:
 
         m = msk == i
@@ -205,6 +166,100 @@ def append_shapes_to_msk(msk: np.ndarray, shapes: list, start_idx: int) -> np.nd
     return output
 
 
+# %% make_submsks() ----
+
+
+def make_submsks(msk: np.ndarray) -> dict:
+    """Make submasks from main mask.
+
+    Args:
+      msk (numpy.ndarray): mask (0=no cells, 1=first cell, 2=second cell...).
+
+    Returns:
+      dict: dict of submasks, with keys and values representing IDs and arrays of True/False, respectively.
+
+    """
+
+    output = {}
+
+    for i in np.unique(msk)[1:]:
+
+        output[i] = msk == i
+
+    return output
+
+
+# %% get_submsk_ids_ovl_by_mainmsk() ----
+
+
+def get_submsk_ids_ovl_by_mainmsk(submsks: dict, msk: np.ndarray) -> list:
+    """Get the ID of submasks overlapping with a main mask.
+
+    Args:
+      submsks (dict): dict of submasks with keys and values representing IDs and arrays of True/False, respectively.
+      msk (numpy.ndarray): main mask (0=no cells, 1=first cell, 2=second cell...).
+
+    Returns:
+      list: list of IDs corresponding to the submasks overlapping with the main mask.
+
+    """
+
+    submsks_mainmsk_overlap = {}
+
+    for i in submsks.keys():
+        submsks_mainmsk_overlap[i] = np.any((submsks[i] == True) & (msk > 0))
+
+    output = [k for k, v in submsks_mainmsk_overlap.items() if v == True]
+
+    return output
+
+
+# %% get_pct_submsks1_ovl_by_submsks2() ----
+
+
+def get_pct_submsks1_ovl_by_submsks2(
+    submsks1: dict, submsks2: dict, submsks1_pix_dict: None | dict = None
+) -> dict:
+    """Get the percentage of submask1 area overlapped by submask2 for every submask1-submask2 pair.
+
+    Args:
+      submsks1 (dict): dict of submasks1 with keys and values representing IDs and ndarrays of True/False, respectively.
+      submsks2 (dict): dict of submasks2 with keys and values representing IDs and ndarrays of True/False, respectively.
+      submsks1_pix_dict (dict): dict of pixel counts for each submask1 ID.
+
+    Returns:
+      dict: percentage of submask1 area overlapped by submask2 for every submask1-submask2 pair.
+      Main keys represent submask1 IDs, inner keys and values represent submask2 IDs and percentages of overlapped submask1 area, respectively.
+
+    """
+
+    if submsks1_pix_dict is None:
+
+        get_submsk1_area = lambda k: np.sum(submsks1[k] == True)
+
+    else:
+
+        get_submsk1_area = lambda k: submsks1_pix_dict[k]
+
+    output = {}
+
+    for k in submsks1.keys():
+
+        output[k] = {}
+
+        submsks1_sum = get_submsk1_area(k)
+
+        for k1 in submsks2.keys():
+
+            submsks1_submsks2_sum = np.sum(
+                (submsks1[k] == True) & (submsks2[k1] == True)
+            )
+
+            output[k][k1] = submsks1_submsks2_sum / submsks1_sum * 100
+
+    return output
+
+
 # %% unify_pct_ovl_dicts() ----
 
 
@@ -235,7 +290,7 @@ def unify_pct_ovl_dicts(
 
             pct_ovl_1by2 = pct_ovl_dict1[i][j]
             pct_ovl_2by1 = pct_ovl_dict2[j][i]
-            mean_pct_ovl = (pct_ovl_1by2 + pct_ovl_2by1) * 0.5
+            mean_pct_ovl = np.mean([pct_ovl_1by2, pct_ovl_2by1])
             pct_ovl_1by2_pass = pct_ovl_1by2 >= min_pct_ovl_1by2
             pct_ovl_2by1_pass = pct_ovl_2by1 >= min_pct_ovl_2by1
             pct_ovl_pass = pct_ovl_1by2_pass & pct_ovl_2by1_pass
@@ -317,63 +372,33 @@ def get_submsks1_submsks2_status(
 
     """
 
-    # Single-pass vectorized overlap computation.
-    # Instead of creating one boolean array per cell and iterating over all pairs
-    # (O(N×M×H×W)), we encode both mask IDs as a single integer at every pixel
-    # where both masks are non-zero, then use np.unique to count all pair overlaps
-    # in one O(H×W) sweep.
+    submsks1 = make_submsks(msk=msk1)
 
-    both_mask = (msk1 > 0) & (msk2 > 0)
+    ids1_ovl_by2 = get_submsk_ids_ovl_by_mainmsk(submsks=submsks1, msk=msk2)
 
-    all_ids1 = set(np.unique(msk1).tolist()) - {0}
-    all_ids2 = set(np.unique(msk2).tolist()) - {0}
+    ids1_no_ovl = [k for k in submsks1.keys() if k not in ids1_ovl_by2]
 
-    if np.any(both_mask):
-        m1_flat = msk1[both_mask].astype(np.int64)
-        m2_flat = msk2[both_mask].astype(np.int64)
+    submsks1_ovl_by2 = {k: v for k, v in submsks1.items() if k in ids1_ovl_by2}
 
-        ids1_ovl_set = set(np.unique(m1_flat).tolist())
-        ids2_ovl_set = set(np.unique(m2_flat).tolist())
+    submsks2 = make_submsks(msk=msk2)
 
-        # Encode (id1, id2) pairs as a single integer and count occurrences
-        stride = int(msk2.max()) + 1
-        codes = m1_flat * stride + m2_flat
-        unique_codes, pair_counts = np.unique(codes, return_counts=True)
-        id1_vals = (unique_codes // stride).tolist()
-        id2_vals = (unique_codes % stride).tolist()
+    ids2_ovl_by1 = get_submsk_ids_ovl_by_mainmsk(submsks=submsks2, msk=msk1)
 
-        # Sparse overlap pixel counts: {id1: {id2: pixel_count}}
-        overlap_px = {}
-        for id1, id2, cnt in zip(id1_vals, id2_vals, pair_counts.tolist()):
-            overlap_px.setdefault(id1, {})[id2] = cnt
+    ids2_no_ovl = [k for k in submsks2.keys() if k not in ids2_ovl_by1]
 
-        ids1_ovl = list(ids1_ovl_set)
-        ids2_ovl = list(ids2_ovl_set)
+    submsks2_ovl_by1 = {k: v for k, v in submsks2.items() if k in ids2_ovl_by1}
 
-        # Build full pct_ovl dicts (zero for pairs with no actual pixel overlap)
-        pct_ovl_1by2 = {
-            id1: {
-                id2: overlap_px.get(id1, {}).get(id2, 0) / submsks1_pix_dict[id1] * 100
-                for id2 in ids2_ovl
-            }
-            for id1 in ids1_ovl
-        }
+    pct_ovl_1by2 = get_pct_submsks1_ovl_by_submsks2(
+        submsks1=submsks1_ovl_by2,
+        submsks2=submsks2_ovl_by1,
+        submsks1_pix_dict=submsks1_pix_dict,
+    )
 
-        pct_ovl_2by1 = {
-            id2: {
-                id1: overlap_px.get(id1, {}).get(id2, 0) / submsks2_pix_dict[id2] * 100
-                for id1 in ids1_ovl
-            }
-            for id2 in ids2_ovl
-        }
-    else:
-        ids1_ovl_set = set()
-        ids2_ovl_set = set()
-        pct_ovl_1by2 = {}
-        pct_ovl_2by1 = {}
-
-    ids1_no_ovl = [k for k in all_ids1 if k not in ids1_ovl_set]
-    ids2_no_ovl = [k for k in all_ids2 if k not in ids2_ovl_set]
+    pct_ovl_2by1 = get_pct_submsks1_ovl_by_submsks2(
+        submsks1=submsks2_ovl_by1,
+        submsks2=submsks1_ovl_by2,
+        submsks1_pix_dict=submsks2_pix_dict,
+    )
 
     prim_sec_neg = {i: {"status": "neg"} for i in ids1_no_ovl}
 
@@ -456,30 +481,57 @@ def get_submsks1_submsks2_status(
     return output
 
 
-# %% status_dict_to_cnts() ----
+# %% status_dict_to_submsks_and_cnts() ----
 
 
-def status_dict_to_cnts(status_dict: dict, cnt_dict: dict) -> dict:
-    """Get contours for every submask ID in a submasks status dict.
+def status_dict_to_submsks_and_cnts(
+    msk: np.ndarray, status_dict: dict, cnt_dict: dict | None
+) -> dict:
+    """Get submasks and contours from main mask and submasks status dict.
 
     Args:
+      msk (numpy.ndarray): mask (0=no cells, 1=first cell, 2=second cell...).
       status_dict (dict): submasks status dict produced by get_submsks1_submsks2_status().
-      cnt_dict (dict): dict of precomputed contours for the input mask.
+      cnt_dict (dict): dict of precomputed contours for input mask.
 
     Returns:
-      dict: dict of contours per submask ID, keyed by submask status (neg, pos, amb).
+      dict: dict of submasks and contours for every submask ID in submasks status dict.
+      Main keys represent submask status (negative, positive or ambiguous).
 
     """
 
-    cnts = {}
+    tmp = {}
 
-    for status in status_dict.keys():
+    if cnt_dict is None:
 
-        ids = status_dict[status].keys()
+        def get_cnt():
 
-        cnts[status] = {k: cnt_dict[k] for k in ids if k in cnt_dict}
+            cnt = msk_to_cnts(msk=submsk)
 
-    return cnts
+            output = {k: cnt[k] for k in ids}
+
+            return output
+
+    else:
+
+        get_cnt = lambda: {k: cnt_dict[k] for k in ids if k in cnt_dict}
+
+    for i in status_dict.keys():
+
+        ids = list(status_dict[i].keys())
+
+        submsk = np.where(np.isin(msk, ids), msk, 0)
+
+        cnt = get_cnt()
+
+        tmp[i] = {"msk": submsk, "cnt": cnt}
+
+    submsks = {k: v["msk"] for k, v in tmp.items()}
+    cnts = {k: v["cnt"] for k, v in tmp.items()}
+
+    output = (submsks, cnts)
+
+    return output
 
 
 # %% require_java() ----
@@ -1029,7 +1081,6 @@ def make_elem_txt(
         "ch0-pos/ch1-amb",
         "ch1-pos/ch0-amb",
     ),
-    selected_ids_override: dict | None = None,
 ) -> dict:
     """Create string with PALM element properties.
 
@@ -1116,6 +1167,10 @@ Elements :\n
         for k1, k2, _ in populations.values()
     ]
 
+    # laser_function = [
+    #     [i for x in range(j)] + ["-" for x in range(k - j)]
+    #     for i, j, k in zip(laser_function, n_collect, n)
+    # ]
     laser_function = [[i for x in range(j)] for i, j in zip(laser_function, n)]
 
     laser_function = list(chain.from_iterable(laser_function))
@@ -1125,38 +1180,28 @@ Elements :\n
         for k1, k2, _ in populations.values()
     ]
 
+    # tube_id = [
+    #     [i for x in range(j)] + ["-" for x in range(k - j)]
+    #     for i, j, k in zip(tube_id, n_collect, n)
+    # ]
     tube_id = [[i for x in range(j)] for i, j in zip(tube_id, n)]
 
     tube_id = list(chain.from_iterable(tube_id))
 
-    collect_per_pop = []
-    comment_per_pop = []
+    comment = [
+        [f"{i[2]} #{x+1} - COLLECT" for x in range(j)]
+        + [f"{i[2]} #{x+1} - OMIT" for x in range(j, k)]
+        for i, j, k in zip(populations.values(), n_collect, n)
+    ]
 
-    for pop_key, (_, _, label), pop_ids, nc in zip(
-        populations.keys(), populations.values(), ids, n_collect
-    ):
-        if selected_ids_override and pop_key in selected_ids_override:
-            selected = selected_ids_override[pop_key]
-            cf = [cell_id in selected for cell_id in pop_ids]
-        else:
-            cf = [True] * nc + [False] * (len(pop_ids) - nc)
+    comment = list(chain.from_iterable(comment))
 
-        collect_per_pop.append(cf)
+    collect = [
+        [True for x in range(i)] + [False for x in range(j - i)]
+        for i, j in zip(n_collect, n)
+    ]
 
-        n_selected = sum(cf)
-        c_idx, o_idx = 0, 0
-        pop_comments = []
-        for is_collect in cf:
-            if is_collect:
-                c_idx += 1
-                pop_comments.append(f"{label} #{c_idx} - COLLECT")
-            else:
-                o_idx += 1
-                pop_comments.append(f"{label} #{n_selected + o_idx} - OMIT")
-        comment_per_pop.append(pop_comments)
-
-    comment = list(chain.from_iterable(comment_per_pop))
-    collect = list(chain.from_iterable(collect_per_pop))
+    collect = list(chain.from_iterable(collect))
 
     rois = list(zip(cnt, color, laser_function, tube_id, area, comment, collect))
     

@@ -26,10 +26,6 @@ from qtpy.QtWidgets import (
     QSizePolicy,
     QStyle,
     QComboBox,
-    QDialog,
-    QScrollArea,
-    QCheckBox,
-    QDialogButtonBox,
 )
 from qtpy.QtCore import Signal, QObject, QThread, Qt
 from qtpy.QtGui import QColor
@@ -143,7 +139,6 @@ class UIComponents:
         self.box_elem_ch0pos_ch1amb = None
         self.box_elem_ch1pos_ch0neg = None
         self.box_elem_ch1pos_ch0amb = None
-        self.btns_select_cells = {}
 
 
 # %% ParamValueBox() ----
@@ -189,7 +184,6 @@ class ParamValueBox(QWidget):
 class ElementConfigBox(QWidget):
 
     valueChanged = Signal(dict)
-    nCollectChanged = Signal(int)
 
     def __init__(
         self,
@@ -251,7 +245,6 @@ class ElementConfigBox(QWidget):
         main_layout.addLayout(row3)
 
         # signals
-        self.spin_n.valueChanged.connect(self.nCollectChanged)
         self.spin_n.valueChanged.connect(self.emit_value)
         self.combo_tube.currentTextChanged.connect(self.emit_value)
         self.combo_laser.currentTextChanged.connect(self.emit_value)
@@ -472,6 +465,8 @@ class PredictFilterWorker(BaseWorker):
 
     def compute(self):
 
+        # from csbdeep.utils import normalize
+
         output = {}
         filt_msk_changed = {}
 
@@ -480,6 +475,10 @@ class PredictFilterWorker(BaseWorker):
             if self.do_predict:
 
                 # Run StarDist
+                # img = normalize(
+                #     self.data[v]["img"], 1, 99.8, axis=(0, 1)
+                # )  # Adjust this depending on training parameters
+
                 img = self.data[v]["norm_img"].astype(np.float32) / 255.0
 
                 n_tiles = workflow.choose_stardist_n_tiles(img)
@@ -685,8 +684,9 @@ class OverlapWorker(BaseWorker):
             summary = {x: len(y) for x, y in k.items()}
             summary["total"] = sum(summary.values())
 
-            # Extract contours per status from the precomputed contour dict
-            cnts = workflow.status_dict_to_cnts(
+            # Extract submasks and contours
+            submsks, cnts = workflow.status_dict_to_submsks_and_cnts(
+                msk=self.data[i]["edit_msk"],
                 status_dict=k,
                 cnt_dict=self.data[i]["edit_cnts"],
             )
@@ -694,6 +694,7 @@ class OverlapWorker(BaseWorker):
             output[i] = {
                 f"{j}_status": k,
                 "summary": summary,
+                "submsks": submsks,
                 "cnts": cnts,
             }
 
@@ -736,36 +737,6 @@ class OverlapWorker(BaseWorker):
                 thickness=4,
             )
 
-        # Collect centroids, rank labels and population colors for the ROI IDs Points layer
-        def _centroid_yx(cnt):
-            M = cv2.moments(cnt.reshape(-1, 1, 2).astype(np.int32))
-            if M["m00"] == 0:
-                return None
-            return int(M["m01"] / M["m00"]), int(M["m10"] / M["m00"])  # (row, col)
-
-        id_centroids, id_labels, id_colors = [], [], []
-
-        for ch_nm, status, elem_key in [
-            (ch0_nm, "neg", "ch0-pos/ch1-neg"),
-            (ch0_nm, "pos", "ch0-pos/ch1-pos"),
-            (ch0_nm, "amb", "ch0-pos/ch1-amb"),
-            (ch1_nm, "neg", "ch1-pos/ch0-neg"),
-            (ch1_nm, "amb", "ch1-pos/ch0-amb"),
-        ]:
-            rgba = tuple(c / 255.0 for c in rgb_from_config(elem_key)) + (1.0,)
-            for rank, cnt in enumerate(output[ch_nm]["cnts"][status].values(), start=1):
-                pt = _centroid_yx(cnt)
-                if pt is not None:
-                    id_centroids.append(pt)
-                    id_labels.append(str(rank))
-                    id_colors.append(rgba)
-
-        output["cell_ids"] = {
-            "centroids": np.array(id_centroids, dtype=float) if id_centroids else np.zeros((0, 2)),
-            "labels": id_labels,
-            "colors": np.array(id_colors, dtype=float) if id_colors else np.zeros((0, 4)),
-        }
-
         output["merge"] = {"merge_norm_img_status": merge_norm_img}
 
         return output
@@ -796,73 +767,6 @@ def _make_color_overlay_delegate(base_cls):
     return _ColorOverlayDelegate
 
 
-# %% CellSelectionDialog() ----
-
-
-class CellSelectionDialog(QDialog):
-
-    def __init__(self, title, cells, initial_selected, px_area_um2=1.0, parent=None):
-        """
-        cells: ordered list of (cell_id, cell_data_dict) — best ranked first.
-        initial_selected: set of cell_ids to pre-check.
-        cell_data_dict has 'area' (pixels) and optionally 'summary' with overlap metrics.
-        """
-        super().__init__(parent)
-        self.setWindowTitle(title)
-        self.setMinimumSize(340, 460)
-
-        layout = QVBoxLayout(self)
-
-        btn_row = QHBoxLayout()
-        btn_all = QPushButton("Select all")
-        btn_none = QPushButton("Select none")
-        btn_all.clicked.connect(self._select_all)
-        btn_none.clicked.connect(self._select_none)
-        btn_row.addWidget(btn_all)
-        btn_row.addWidget(btn_none)
-        layout.addLayout(btn_row)
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        container = QWidget()
-        scroll_layout = QVBoxLayout(container)
-        scroll_layout.setSpacing(2)
-        scroll_layout.setContentsMargins(4, 4, 4, 4)
-
-        self._checkboxes = {}
-
-        for rank, (cell_id, cell_data) in enumerate(cells):
-            area_um2 = cell_data.get("area", 0) * px_area_um2
-            label = f"#{rank + 1}  |  {area_um2:.0f} µm²"
-            if "summary" in cell_data:
-                ovl = cell_data["summary"].get("max_mean_pct_ovl", 0)
-                label += f"  |  {ovl:.1f}% ovl"
-            cb = QCheckBox(label)
-            cb.setChecked(cell_id in initial_selected)
-            self._checkboxes[cell_id] = cb
-            scroll_layout.addWidget(cb)
-
-        scroll_layout.addStretch()
-        scroll.setWidget(container)
-        layout.addWidget(scroll)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-    def _select_all(self):
-        for cb in self._checkboxes.values():
-            cb.setChecked(True)
-
-    def _select_none(self):
-        for cb in self._checkboxes.values():
-            cb.setChecked(False)
-
-    def selected_ids(self):
-        return {cell_id for cell_id, cb in self._checkboxes.items() if cb.isChecked()}
-
-
 # %% PluginManager() ----
 
 
@@ -884,20 +788,11 @@ class PluginManager(QWidget):
 
         self.ui = UIComponents()
 
-        self._manual_selections = {}
-
-        # ROI IDs text size is in data coordinates, so it scales with zoom; these track
-        # a reference zoom to rescale the font and keep its on-screen size constant.
-        self._roi_id_base_text_size = 10
-        self._roi_id_ref_zoom = None
-
         self.build_layout()
 
         self.init_viewer_layers()
 
         self._install_layer_colors()
-
-        self.viewer.camera.events.zoom.connect(self._update_roi_id_text_size)
 
         message = f"""Loading StarDist models...
     
@@ -1130,26 +1025,6 @@ class PluginManager(QWidget):
                 merge_array, name="Merge + ROIs", rgb=True, visible=False
             )
 
-            self.layers["cell_ids"] = self.viewer.add_points(
-                np.zeros((0, 2)),
-                size=0,
-                name="ROI IDs",
-                visible=False,
-            )
-
-            # Warm up napari's text rendering with a temporary layer so the first
-            # "Find overlaps" does not pay the font-initialization cost.
-            try:
-                _tmp = self.viewer.add_points(
-                    np.array([[0.0, 0.0]]),
-                    size=0,
-                    visible=False,
-                    text={"string": [" "], "size": 14, "color": "white", "visible": False},
-                )
-                self.viewer.layers.remove(_tmp)
-            except Exception:
-                pass
-
     def reset_viewer_layers(self):
 
         image_array = np.zeros((1, 1), dtype=np.uint8)
@@ -1181,9 +1056,6 @@ class PluginManager(QWidget):
 
             self.layers["merge"].data = merge_array
             self.layers["merge"].name = "Merge + ROIs"
-
-            self.layers["cell_ids"].data = np.zeros((0, 2))
-            self.layers["cell_ids"].visible = False
 
     def set_workflow_state(self, state: WorkflowState, force=False):
 
@@ -1256,7 +1128,6 @@ class PluginManager(QWidget):
                     self.layers[i][j].editable = False
 
             self.layers["merge"].visible = False
-            self.layers["cell_ids"].visible = False
 
             # No image
             if state == ViewerState.NO_IMAGE:
@@ -1384,10 +1255,6 @@ class PluginManager(QWidget):
             if isinstance(i, QWidget):
 
                 i.setEnabled(enabled)
-
-        for btn in self.ui.btns_select_cells.values():
-
-            btn.setEnabled(enabled)
 
     def set_select_file_ui(self):
 
@@ -1632,35 +1499,18 @@ class PluginManager(QWidget):
                 "ch1-pos/ch0-amb": self.ui.box_elem_ch1pos_ch0amb,
             }
 
-            pop_keys_ordered = [
-                k for k in self.config["elements"].keys() if k in box_elem_dict
+            box_elem_list = [
+                box_elem_dict[k]
+                for k in self.config["elements"].keys()
+                if k in box_elem_dict.keys()
             ]
 
-            box_elem_list = [box_elem_dict[k] for k in pop_keys_ordered]
+            for i, j in zip(
+                [2, 3, 4, 5, 6, 7, 8],
+                [self.ui.btn_overlap_filter] + box_elem_list + [self.ui.btn_save],
+            ):
 
-            # Connect nCollectChanged to clear manual selection when spinner is edited directly
-            for pop_key, box in zip(pop_keys_ordered, box_elem_list):
-                box.nCollectChanged.connect(
-                    lambda n, pk=pop_key: self._on_n_collect_changed(pk)
-                )
-
-            # Create "Choose ROIs" button for each population
-            for pop_key in pop_keys_ordered:
-                btn_select = QPushButton("Choose ROIs")
-                btn_select.clicked.connect(
-                    lambda checked=False, pk=pop_key: self._on_select_cells_clicked(pk)
-                )
-                self.ui.btns_select_cells[pop_key] = btn_select
-
-            # Insert widgets: btn_overlap_filter, then (box, btn_select) pairs, then btn_save
-            widgets_to_insert = [self.ui.btn_overlap_filter]
-            for box, pop_key in zip(box_elem_list, pop_keys_ordered):
-                widgets_to_insert.append(box)
-                widgets_to_insert.append(self.ui.btns_select_cells[pop_key])
-            widgets_to_insert.append(self.ui.btn_save)
-
-            for i, w in enumerate(widgets_to_insert):
-                self.layout.insertWidget(2 + i, w)
+                self.layout.insertWidget(i, j)
 
         # Re-enable 'min % ovl' and 'element' boxes, 'Adjust overlap filter', 'Save results' and 'Clear' buttons
         # => 'Adjust overlap filter' button, 'element' boxes and 'Save results' button do not exist yet if overlaps are returned for the first time
@@ -1678,9 +1528,6 @@ class PluginManager(QWidget):
         ]:
 
             i.setEnabled(True)
-
-        for btn in self.ui.btns_select_cells.values():
-            btn.setEnabled(True)
 
         # Update 'element' boxes
         self.update_elem_boxes()
@@ -1715,12 +1562,6 @@ class PluginManager(QWidget):
                 j.hide()
                 j.deleteLater()
                 setattr(self.ui, i, None)
-
-        for btn in list(self.ui.btns_select_cells.values()):
-            self.layout.removeWidget(btn)
-            btn.hide()
-            btn.deleteLater()
-        self.ui.btns_select_cells.clear()
 
     def update_viewer_data_on_load_finished(self):
 
@@ -1765,73 +1606,11 @@ class PluginManager(QWidget):
 
     def update_viewer_data_on_overlap_finished(self):
 
-        cell_ids = self.workflow.data.get("cell_ids", {})
-        centroids = cell_ids.get("centroids", np.zeros((0, 2)))
-        labels = cell_ids.get("labels", [])
-        colors = cell_ids.get("colors", np.zeros((0, 4)))
+        with self.viewer.layers.events.blocker():
 
-        self.layers["merge"].data = self.workflow.data["merge"]["merge_norm_img_status"]
-
-        pts = centroids if len(centroids) > 0 else np.zeros((0, 2))
-        layer = self.layers["cell_ids"]
-
-        # Capture the current zoom as the reference at which base text size applies.
-        self._roi_id_ref_zoom = self.viewer.camera.zoom
-
-        if len(labels) > 0:
-            hex_colors = [
-                "#{:02x}{:02x}{:02x}".format(int(r * 255), int(g * 255), int(b * 255))
-                for r, g, b, *_ in colors
+            self.layers["merge"].data = self.workflow.data["merge"][
+                "merge_norm_img_status"
             ]
-            text_dict = {
-                "string": list(labels),
-                "size": self._roi_id_base_text_size,
-                "color": hex_colors,
-                "visible": True,
-            }
-            try:
-                # layer.data resets the TextManager synchronously via feature-table resize.
-                # Setting text before AND after data ensures the labels survive the reset and
-                # are correct when the Qt event loop eventually processes the canvas repaint.
-                layer.text = text_dict
-                layer.data = pts
-                layer.text = text_dict
-                layer.visible = True
-            except Exception:
-                # Recreation fallback
-                with self.viewer.layers.events.blocker():
-                    old_layer = self.layers.get("cell_ids")
-                    if old_layer is not None and old_layer in self.viewer.layers:
-                        self.viewer.layers.remove(old_layer)
-                    add_kw = {"size": 0, "name": "ROI IDs", "visible": True, "text": text_dict}
-                    try:
-                        self.layers["cell_ids"] = self.viewer.add_points(pts, **add_kw)
-                    except Exception:
-                        del add_kw["text"]
-                        self.layers["cell_ids"] = self.viewer.add_points(pts, **add_kw)
-        else:
-            layer.data = pts
-            layer.visible = True
-
-    def _update_roi_id_text_size(self, event=None):
-
-        # Rescale ROI ID font with zoom so its on-screen size stays constant.
-        # Text size is in data coordinates: on-screen size ~ size / zoom, so size must
-        # track zoom (size = base * zoom / ref_zoom) to keep the apparent size fixed.
-        if self._roi_id_ref_zoom is None:
-            return
-
-        layer = self.layers.get("cell_ids")
-
-        if layer is None or len(layer.data) == 0 or not getattr(layer, "visible", False):
-            return
-
-        zoom = self.viewer.camera.zoom
-
-        try:
-            layer.text.size = self._roi_id_base_text_size * (zoom / self._roi_id_ref_zoom)
-        except Exception:
-            pass
 
     def set_message(self, text: str, level: MessageLevel = MessageLevel.NONE):
 
@@ -1886,8 +1665,6 @@ class PluginManager(QWidget):
 
         # Reset attributes to default values
         self.config = copy.deepcopy(config)
-
-        self._manual_selections.clear()
 
         self.set_workflow_state(state=WorkflowState.CLEARED)
 
@@ -2116,11 +1893,6 @@ class PluginManager(QWidget):
 
     def on_overlap_filter_clicked(self):
 
-        self._manual_selections.clear()
-
-        for pop_key, btn in self.ui.btns_select_cells.items():
-            btn.setText("Choose ROIs")
-
         self.set_message("Re-computing overlaps...", MessageLevel.WORK)
 
         # Trigger overlap worker thread
@@ -2143,10 +1915,6 @@ class PluginManager(QWidget):
             if k == "merge":
 
                 self.workflow.data["merge"].update(v)
-
-            elif k == "cell_ids":
-
-                self.workflow.data["cell_ids"] = v
 
             else:
 
@@ -2196,7 +1964,6 @@ class PluginManager(QWidget):
             cnts_key="cnts",
             submsks_area_um2_key="submsks_area_um2",
             pop_order=tuple(self.config["elements"].keys()),
-            selected_ids_override=self._manual_selections if self._manual_selections else None,
         )
 
         for k in self.elem_list.keys():
@@ -2251,72 +2018,6 @@ class PluginManager(QWidget):
         
         print("\n")
 
-    def _get_elem_box(self, pop_key: str):
-        return {
-            "ch0-pos/ch1-neg": self.ui.box_elem_ch0pos_ch1neg,
-            "ch0-pos/ch1-pos": self.ui.box_elem_ch0pos_ch1pos,
-            "ch1-pos/ch0-neg": self.ui.box_elem_ch1pos_ch0neg,
-            "ch0-pos/ch1-amb": self.ui.box_elem_ch0pos_ch1amb,
-            "ch1-pos/ch0-amb": self.ui.box_elem_ch1pos_ch0amb,
-        }[pop_key]
-
-    def _get_pop_ch_status(self, pop_key: str):
-        ch0_nm = self.workflow.ch_names[0]
-        ch1_nm = self.workflow.ch_names[1]
-        return {
-            "ch0-pos/ch1-neg": (ch0_nm, "neg"),
-            "ch0-pos/ch1-pos": (ch0_nm, "pos"),
-            "ch1-pos/ch0-neg": (ch1_nm, "neg"),
-            "ch0-pos/ch1-amb": (ch0_nm, "amb"),
-            "ch1-pos/ch0-amb": (ch1_nm, "amb"),
-        }[pop_key]
-
-    def _on_n_collect_changed(self, pop_key: str):
-        if pop_key in self._manual_selections:
-            self._manual_selections.pop(pop_key)
-            if pop_key in self.ui.btns_select_cells:
-                self.ui.btns_select_cells[pop_key].setText("Choose ROIs")
-
-    def _on_select_cells_clicked(self, pop_key: str):
-
-        ch_nm, status = self._get_pop_ch_status(pop_key)
-        ch_idx = next(k for k, v in self.workflow.ch_names.items() if v == ch_nm)
-        ch_other_nm = self.workflow.ch_names[1 - ch_idx]
-
-        cnts = self.workflow.data[ch_nm]["cnts"][status]
-        status_dict = self.workflow.data[ch_nm][f"{ch_other_nm}_status"][status]
-
-        cells = [(cell_id, status_dict.get(cell_id, {})) for cell_id in cnts.keys()]
-
-        if pop_key in self._manual_selections:
-            initial_selected = self._manual_selections[pop_key]
-        else:
-            box = self._get_elem_box(pop_key)
-            n_collect = box.spin_n.value()
-            initial_selected = set(list(cnts.keys())[:n_collect])
-
-        px_area_um2 = self.workflow.metadata["image"]["px_area_um2"]
-        title = self._get_elem_box(pop_key).base_label
-
-        dialog = CellSelectionDialog(
-            title=title,
-            cells=cells,
-            initial_selected=initial_selected,
-            px_area_um2=px_area_um2,
-            parent=self,
-        )
-
-        if dialog.exec_():
-            selected = dialog.selected_ids()
-            self._manual_selections[pop_key] = selected
-
-            box = self._get_elem_box(pop_key)
-            box.spin_n.blockSignals(True)
-            box.spin_n.setValue(len(selected))
-            box.spin_n.blockSignals(False)
-
-            pass
-
     def on_min_area_changed(self, key: int, value: float):
 
         self.config["channels"][key]["min_area_um2"] = float(value)
@@ -2361,8 +2062,14 @@ class PluginManager(QWidget):
                 max_n_collect if self.config["elements"][k]["collect"] is True else 0
             )
 
+            # laser_function = (
+            #     self.config["elements"][k]["laser_function"]
+            #     if max_n_collect > 0
+            #     else ""
+            # )
             laser_function = self.config["elements"][k]["laser_function"]
 
+            # tube_id = self.config["elements"][k]["tube_id"] if max_n_collect > 0 else ""
             tube_id = self.config["elements"][k]["tube_id"]
 
             color = self.config["elements"][k]["color"]
