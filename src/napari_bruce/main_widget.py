@@ -224,7 +224,14 @@ class ElementConfigBox(QWidget):
         self.spin_n = QSpinBox()
         self.spin_n.setRange(min_n_collect, max_n_collect)
         self.spin_n.setValue(n_collect)
+        self.spin_n.setMaximumWidth(60)
         row1.addWidget(self.spin_n)
+
+        # "Choose ROIs" goes in this existing row, not a separate row per box: extra
+        # rows make the panel tall enough to trigger a canvas resize that freezes the
+        # viewer in macOS full-screen.
+        self.btn_choose_rois = QPushButton("Choose ROIs")
+        row1.addWidget(self.btn_choose_rois, stretch=1)
 
         main_layout.addLayout(row1)
 
@@ -1143,24 +1150,6 @@ class PluginManager(QWidget):
                 visible=False,
             )
 
-            # Warm up napari's text rendering with a temporary layer so the first
-            # "Find overlaps" does not pay the font-initialization cost.
-            try:
-                _tmp = self.viewer.add_points(
-                    np.array([[0.0, 0.0]]),
-                    size=0,
-                    visible=False,
-                    text={
-                        "string": [" "],
-                        "size": 14,
-                        "color": "white",
-                        "visible": False,
-                    },
-                )
-                self.viewer.layers.remove(_tmp)
-            except Exception:
-                pass
-
     def reset_viewer_layers(self):
 
         image_array = np.zeros((1, 1), dtype=np.uint8)
@@ -1659,20 +1648,18 @@ class PluginManager(QWidget):
                     lambda n, pk=pop_key: self._on_n_collect_changed(pk)
                 )
 
-            # Create "Choose ROIs" button for each population
-            for pop_key in pop_keys_ordered:
-                btn_select = QPushButton("Choose ROIs")
-                btn_select.clicked.connect(
+            # Wire each box's built-in "Choose ROIs" button (the button lives inside
+            # the element box, so no extra rows are added to the panel)
+            for pop_key, box in zip(pop_keys_ordered, box_elem_list):
+                box.btn_choose_rois.clicked.connect(
                     lambda checked=False, pk=pop_key: self._on_select_cells_clicked(pk)
                 )
-                self.ui.btns_select_cells[pop_key] = btn_select
+                self.ui.btns_select_cells[pop_key] = box.btn_choose_rois
 
-            # Insert widgets: btn_overlap_filter, then (box, btn_select) pairs, then btn_save
-            widgets_to_insert = [self.ui.btn_overlap_filter]
-            for box, pop_key in zip(box_elem_list, pop_keys_ordered):
-                widgets_to_insert.append(box)
-                widgets_to_insert.append(self.ui.btns_select_cells[pop_key])
-            widgets_to_insert.append(self.ui.btn_save)
+            # Insert widgets: btn_overlap_filter, element boxes, btn_save
+            widgets_to_insert = (
+                [self.ui.btn_overlap_filter] + box_elem_list + [self.ui.btn_save]
+            )
 
             for i, w in enumerate(widgets_to_insert):
                 self.layout.insertWidget(2 + i, w)
@@ -1731,10 +1718,8 @@ class PluginManager(QWidget):
                 j.deleteLater()
                 setattr(self.ui, i, None)
 
-        for btn in list(self.ui.btns_select_cells.values()):
-            self.layout.removeWidget(btn)
-            btn.hide()
-            btn.deleteLater()
+        # The "Choose ROIs" buttons live inside the element boxes and are destroyed
+        # together with them above; just drop the references.
         self.ui.btns_select_cells.clear()
 
     def update_viewer_data_on_load_finished(self):
@@ -1804,31 +1789,12 @@ class PluginManager(QWidget):
                 "color": hex_colors,
                 "visible": True,
             }
-            try:
-                # layer.data resets the TextManager synchronously via feature-table resize.
-                # Setting text before AND after data ensures the labels survive the reset and
-                # are correct when the Qt event loop eventually processes the canvas repaint.
-                layer.text = text_dict
-                layer.data = pts
-                layer.text = text_dict
-                layer.visible = True
-            except Exception:
-                # Recreation fallback
-                with self.viewer.layers.events.blocker():
-                    old_layer = self.layers.get("cell_ids")
-                    if old_layer is not None and old_layer in self.viewer.layers:
-                        self.viewer.layers.remove(old_layer)
-                    add_kw = {
-                        "size": 0,
-                        "name": "ROI IDs",
-                        "visible": True,
-                        "text": text_dict,
-                    }
-                    try:
-                        self.layers["cell_ids"] = self.viewer.add_points(pts, **add_kw)
-                    except Exception:
-                        del add_kw["text"]
-                        self.layers["cell_ids"] = self.viewer.add_points(pts, **add_kw)
+            # Set text before AND after data: assigning .data resets the TextManager,
+            # so the labels must be reapplied afterwards to survive the reset.
+            layer.text = text_dict
+            layer.data = pts
+            layer.text = text_dict
+            layer.visible = True
         else:
             layer.data = pts
             layer.visible = True
@@ -2342,8 +2308,6 @@ class PluginManager(QWidget):
             box.spin_n.blockSignals(True)
             box.spin_n.setValue(len(selected))
             box.spin_n.blockSignals(False)
-
-            pass
 
     def on_min_area_changed(self, key: int, value: float):
 
