@@ -1,6 +1,6 @@
 [project]
 name = "napari-bruce"
-version = "0.2.8"
+dynamic = ["version"]
 description = "A napari plugin for drawing PALM RoboSoftware elements using StarDist segmentation"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -36,6 +36,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 include-package-data = true
+
+[tool.setuptools.dynamic]
+version = {attr = "napari_bruce.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["src"]

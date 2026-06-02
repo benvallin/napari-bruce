@@ -511,10 +511,20 @@ def get_version() -> str:
 
     """
 
+    # Read the live __version__ from the source so editable installs reflect the
+    # working tree without a reinstall; fall back to the installed metadata.
     try:
 
-        return version("napari-bruce")
+        from napari_bruce import __version__
 
-    except PackageNotFoundError:
+        return __version__
 
-        return "unknown"
+    except Exception:
+
+        try:
+
+            return version("napari-bruce")
+
+        except PackageNotFoundError:
+
+            return "unknown"
