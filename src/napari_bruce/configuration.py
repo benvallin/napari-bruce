@@ -118,6 +118,47 @@ def list_tube_ids() -> list:
     return output
 
 
+# %% list_channel_colors() ----
+
+
+def list_channel_colors() -> list:
+    """List available channel colors.
+
+    Returns:
+      list: available channel colors.
+
+    """
+
+    output = [
+        "purple",
+        "cyan",
+    ]
+
+    return output
+
+
+# %% list_population_colors() ----
+
+
+def list_population_colors() -> list:
+    """List available population colors.
+
+    Returns:
+      list: available population colors.
+
+    """
+
+    output = [
+        "magenta",
+        "yellow",
+        "cyan",
+        "darkred",
+        "grey",
+    ]
+
+    return output
+
+
 # %% check_config_integrity() ----
 
 
@@ -222,6 +263,8 @@ def check_config_integrity(config: dict) -> None:
 
     available_models = [k for k in list_stardist_models().keys()]
 
+    available_channel_colors = list_channel_colors()
+
     for i in config["channels"].keys():
 
         check_dict_kv(
@@ -234,6 +277,12 @@ def check_config_integrity(config: dict) -> None:
 
             raise ConfigError(
                 f"config['channels']['{i}']['stardist_model'] must be one of {', '.join(available_models)}."
+            )
+
+        if config["channels"][i]["color"] not in available_channel_colors:
+
+            raise ConfigError(
+                f"config['channels']['{i}']['color'] must be one of {', '.join(available_channel_colors)}."
             )
 
         for j in ["low_pct", "high_pct"]:
@@ -251,6 +300,8 @@ def check_config_integrity(config: dict) -> None:
     available_laser_functions = list_laser_functions()
 
     available_tube_ids = list_tube_ids()
+
+    available_population_colors = list_population_colors()
 
     for i in config["elements"].keys():
 
@@ -272,6 +323,12 @@ def check_config_integrity(config: dict) -> None:
                 f"config['elements']['{i}']['tube_id'] must be one of {', '.join(available_tube_ids)}."
             )
 
+        if config["elements"][i]["color"] not in available_population_colors:
+
+            raise ConfigError(
+                f"config['elements']['{i}']['color'] must be one of {', '.join(available_population_colors)}."
+            )
+
     check_dict_kv(
         exp_kv=exp_ch_annot_kv,
         in_dict=config["channels_annotation"],
@@ -285,6 +342,12 @@ def check_config_integrity(config: dict) -> None:
             in_dict=config["channels_annotation"][i],
             dict_nm=f"config channel annotation {i}",
         )
+
+        if config["channels_annotation"][i]["color"] not in available_channel_colors:
+
+            raise ConfigError(
+                f"config['channels_annotation']['{i}']['color'] must be one of {', '.join(available_channel_colors)}."
+            )
 
         for j in ["low_pct", "high_pct"]:
 
