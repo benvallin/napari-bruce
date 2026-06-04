@@ -505,8 +505,8 @@ def require_java() -> str:
 
 
 def convert_zvi_to_ome(
-    file: str | Path,
-    out_dir_path: str | Path,
+    file: str,
+    out_dir_path: str,
     jar_pkg: str = "napari_bruce.bioformats",
     jar_name: str = "bioformats_package.jar",
     java_opts: list | None = None,
@@ -515,8 +515,8 @@ def convert_zvi_to_ome(
     """Convert PALM .zvi file to OME-TIFF using Bio-Formats ImageConverter in headless mode.
 
     Args:
-      file (str | Path): path to PALM .zvi file.
-      out_dir_path (str | Path): path to output directory. The directory is created if it does not already exist.
+      file (str): path to PALM .zvi file.
+      out_dir_path (str): path to output directory. The directory is created if it does not already exist.
       jar_pkg (str): name of the Python package containing the Bio-Formats JAR file.
       jar_name (str): file name of the Bio-Formats JAR inside 'jar_pkg'.
       java_opts (list): additional JVM options to pass to the java command.
@@ -591,11 +591,11 @@ class InvalidImageError(Exception):
     pass
 
 
-def load_ome_tiff(file: str | Path) -> tuple:
+def load_ome_tiff(file: str) -> tuple:
     """Load OME-TIFF file derived from PALM .zvi file.
 
     Args:
-      file (str | Path): path to .ome.tiff file.
+      file (str): path to .ome.tiff file.
 
     Returns:
       tuple: tuple containing 'images' and 'metadata' dict objects.

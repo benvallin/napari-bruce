@@ -33,13 +33,8 @@ from qtpy.QtWidgets import (
 )
 from qtpy.QtCore import Signal, QObject, QThread, Qt
 from qtpy.QtGui import QColor
-from typing import TYPE_CHECKING
-from dataclasses import dataclass
 from . import configuration
 from . import workflow
-
-if TYPE_CHECKING:
-    import napari
 
 # Check Java
 workflow.require_java()
@@ -86,43 +81,10 @@ class ViewerState(Enum):
     LOCKED = auto()
 
 
-# %% Population descriptors ----
-
-
-@dataclass(frozen=True)
-class Population:
-    """A single cross-channel population (one element box / one element list).
-
-    Single source of truth for the five populations, replacing the per-site
-    parallel lists and key→value dicts scattered across the widget.
-    """
-
-    key: str  # matches a config["elements"] key, e.g. "ch0-pos/ch1-neg"
-    primary_ch: int  # 0 or 1: the channel the cells are positive for
-    status: str  # "neg" | "pos" | "amb": the secondary channel's overlap status
-
-
-# Ordered by (primary_ch, status) so iterating reproduces the legacy contour
-# draw order in the merge image. Display order is driven separately by
-# _populations_in_config_order(); all other sites are order-agnostic.
-POPULATIONS = (
-    Population("ch0-pos/ch1-neg", 0, "neg"),
-    Population("ch0-pos/ch1-pos", 0, "pos"),
-    Population("ch0-pos/ch1-amb", 0, "amb"),
-    Population("ch1-pos/ch0-neg", 1, "neg"),
-    Population("ch1-pos/ch0-amb", 1, "amb"),
-)
-
-POPULATION_BY_KEY = {p.key: p for p in POPULATIONS}
-
-
 # %% ControlState() ----
 
 
 class ControlState:
-
-    workflow_state: WorkflowState | None
-    viewer_state: ViewerState | None
 
     def __init__(self):
 
@@ -139,22 +101,16 @@ class ControlState:
 
 class WorkflowData:
 
-    path: str
-    data: dict
-    metadata: dict
-    ch_names: dict[int, str]
-    channel_mismatch: bool
-
     def __init__(self):
 
         self.reset()
 
     def reset(self):
 
-        self.path = ""
-        self.data = {}
-        self.metadata = {}
-        self.ch_names = {}
+        self.path = None
+        self.data = None
+        self.metadata = None
+        self.ch_names = None
         self.channel_mismatch = False
 
 
@@ -162,22 +118,6 @@ class WorkflowData:
 
 
 class UIComponents:
-
-    btn_select: QPushButton | None
-    btn_clear: QPushButton | None
-    btn_load: QPushButton | None
-    btn_predict: QPushButton | None
-    btn_filter_size: QPushButton | None
-    btn_apply_edits: QPushButton | None
-    btn_overlap: QPushButton | None
-    btn_overlap_filter: QPushButton | None
-    btn_save: QPushButton | None
-    box_min_area_ch0: "ParamValueBox | None"
-    box_min_area_ch1: "ParamValueBox | None"
-    box_min_pct_ovl_ch0_by_ch1: "ParamValueBox | None"
-    box_min_pct_ovl_ch1_by_ch0: "ParamValueBox | None"
-    box_elems: "dict[str, ElementConfigBox]"  # keyed by population key
-    btns_select_cells: dict[str, QPushButton]
 
     def __init__(self):
 
@@ -198,7 +138,11 @@ class UIComponents:
         self.box_min_area_ch1 = None
         self.box_min_pct_ovl_ch0_by_ch1 = None
         self.box_min_pct_ovl_ch1_by_ch0 = None
-        self.box_elems = {}
+        self.box_elem_ch0pos_ch1neg = None
+        self.box_elem_ch0pos_ch1pos = None
+        self.box_elem_ch0pos_ch1amb = None
+        self.box_elem_ch1pos_ch0neg = None
+        self.box_elem_ch1pos_ch0amb = None
         self.btns_select_cells = {}
 
 
@@ -442,7 +386,7 @@ class LoadModelWorker(BaseWorker):
                 else:
 
                     stardist_models_dir_path = Path(
-                        str(importlib.resources.files("napari_bruce")), "stardist_models"
+                        importlib.resources.files("napari_bruce"), "stardist_models"
                     )
 
                     models[i] = StarDist2D(
@@ -768,22 +712,34 @@ class OverlapWorker(BaseWorker):
                 int(x * 255) for x in to_rgba(self.config["elements"][key]["color"])[:3]
             )
 
-        ch_nm_by_idx = (ch0_nm, ch1_nm)
+        status_colors_ch0 = {
+            "neg": rgb_from_config("ch0-pos/ch1-neg"),
+            "pos": rgb_from_config("ch0-pos/ch1-pos"),
+            "amb": rgb_from_config("ch0-pos/ch1-amb"),
+        }
 
-        # POPULATIONS is ordered (primary_ch, status), reproducing the legacy
-        # ch0:{neg,pos,amb} then ch1:{neg,amb} contour draw order.
-        for p in POPULATIONS:
+        status_colors_ch1 = {
+            "neg": rgb_from_config("ch1-pos/ch0-neg"),
+            "amb": rgb_from_config("ch1-pos/ch0-amb"),
+        }
+
+        for i, j in status_colors_ch0.items():
 
             merge_norm_img = cv2.drawContours(
                 image=merge_norm_img,
-                contours=[
-                    x
-                    for x in output[ch_nm_by_idx[p.primary_ch]]["cnts"][
-                        p.status
-                    ].values()
-                ],
+                contours=[x for x in output[ch0_nm]["cnts"][i].values()],
                 contourIdx=-1,
-                color=rgb_from_config(p.key),
+                color=j,
+                thickness=4,
+            )
+
+        for i, j in status_colors_ch1.items():
+
+            merge_norm_img = cv2.drawContours(
+                image=merge_norm_img,
+                contours=[x for x in output[ch1_nm]["cnts"][i].values()],
+                contourIdx=-1,
+                color=j,
                 thickness=4,
             )
 
@@ -796,12 +752,15 @@ class OverlapWorker(BaseWorker):
 
         id_centroids, id_labels, id_colors = [], [], []
 
-        for p in POPULATIONS:
-            ch_nm = ch_nm_by_idx[p.primary_ch]
-            rgba = tuple(c / 255.0 for c in rgb_from_config(p.key)) + (1.0,)
-            for rank, cnt in enumerate(
-                output[ch_nm]["cnts"][p.status].values(), start=1
-            ):
+        for ch_nm, status, elem_key in [
+            (ch0_nm, "neg", "ch0-pos/ch1-neg"),
+            (ch0_nm, "pos", "ch0-pos/ch1-pos"),
+            (ch0_nm, "amb", "ch0-pos/ch1-amb"),
+            (ch1_nm, "neg", "ch1-pos/ch0-neg"),
+            (ch1_nm, "amb", "ch1-pos/ch0-amb"),
+        ]:
+            rgba = tuple(c / 255.0 for c in rgb_from_config(elem_key)) + (1.0,)
+            for rank, cnt in enumerate(output[ch_nm]["cnts"][status].values(), start=1):
                 pt = _centroid_yx(cnt)
                 if pt is not None:
                     id_centroids.append(pt)
@@ -884,18 +843,15 @@ class CellSelectionDialog(QDialog):
         scroll_layout.setContentsMargins(4, 4, 4, 4)
 
         self._checkboxes = {}
-        self._areas_um2 = {}
 
         for rank, (cell_id, cell_data) in enumerate(cells):
             area_um2 = cell_data.get("area", 0) * px_area_um2
-            self._areas_um2[cell_id] = area_um2
             label = f"#{rank + 1}  |  {area_um2:.0f} µm²"
             if "summary" in cell_data:
                 ovl = cell_data["summary"].get("max_mean_pct_ovl", 0)
                 label += f"  |  {ovl:.1f}% ovl"
             cb = QCheckBox(label)
             cb.setChecked(cell_id in initial_selected)
-            cb.stateChanged.connect(self._update_total_area)
             self._checkboxes[cell_id] = cb
             scroll_layout.addWidget(cb)
 
@@ -903,24 +859,10 @@ class CellSelectionDialog(QDialog):
         scroll.setWidget(container)
         layout.addWidget(scroll)
 
-        self._total_area_label = QLabel()
-        self._total_area_label.setStyleSheet("font-weight: bold;")
-        layout.addWidget(self._total_area_label)
-        self._update_total_area()
-
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
-
-    def _update_total_area(self, *args):
-        total = sum(
-            self._areas_um2[cell_id]
-            for cell_id, cb in self._checkboxes.items()
-            if cb.isChecked()
-        )
-        n = sum(1 for cb in self._checkboxes.values() if cb.isChecked())
-        self._total_area_label.setText(f"Selected: {n}  |  total area {total:.0f} µm²")
 
     def _select_all(self):
         for cb in self._checkboxes.values():
@@ -1041,7 +983,7 @@ class PluginManager(QWidget):
 
         for i in thread_attr_names:
 
-            t: QThread | None = getattr(self, i, None)
+            t = getattr(self, i, None)
 
             if isinstance(t, QThread) and t.isRunning():
 
@@ -1113,18 +1055,11 @@ class PluginManager(QWidget):
             MessageLevel.ERROR,
         )
 
-        assert self.ui.btn_clear is not None
         self.ui.btn_clear.setEnabled(True)
 
         return
 
     def build_layout(self):
-
-        self.file_label = QLabel("")
-        self.file_label.setWordWrap(True)
-        self.file_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-        self.file_label.setStyleSheet("font-weight: bold;")
-        self.file_label.setVisible(False)
 
         self.msg_icon = QLabel()
         self.msg_icon.setFixedSize(16, 16)
@@ -1145,7 +1080,6 @@ class PluginManager(QWidget):
 
         self.header_layout = QVBoxLayout()
         self.header_layout.addSpacing(30)
-        self.header_layout.addWidget(self.file_label)
         self.header_layout.addWidget(self.msg_container)
 
         self.layout = QVBoxLayout()
@@ -1265,9 +1199,6 @@ class PluginManager(QWidget):
     def update_viewer_from_workflow(self):
 
         workflow_state = self.state.workflow_state
-
-        # Safe default; every known workflow state is handled by a branch below.
-        viewer_state = ViewerState.LOCKED
 
         if workflow_state in {
             WorkflowState.SELECT_FILE,
@@ -1464,81 +1395,73 @@ class PluginManager(QWidget):
 
     def set_select_file_ui(self):
 
-        btn_select = QPushButton("Select file")
-        btn_select.clicked.connect(self.on_select_clicked)
-        self.header_layout.insertWidget(0, btn_select)
-        self.ui.btn_select = btn_select
+        self.ui.btn_select = QPushButton("Select file")
+        self.ui.btn_select.clicked.connect(self.on_select_clicked)
+        self.header_layout.insertWidget(0, self.ui.btn_select)
 
     def set_load_image_ui(self):
 
         # Remove 'Select file' button from viewer
-        btn_select = self.ui.btn_select
-        assert btn_select is not None
-        self.layout.removeWidget(btn_select)
-        btn_select.hide()
-        btn_select.deleteLater()
+        self.layout.removeWidget(self.ui.btn_select)
+        self.ui.btn_select.hide()
+        self.ui.btn_select.deleteLater()
         self.ui.btn_select = None
 
         # Add 'Load images', 'Predict cells' and 'Clear' buttons to viewer
-        btn_load = QPushButton("Load images")
-        btn_load.clicked.connect(self.on_load_clicked)
-        self.ui.btn_load = btn_load
+        self.ui.btn_load = QPushButton("Load images")
+        self.ui.btn_load.clicked.connect(self.on_load_clicked)
 
-        btn_predict = QPushButton("Predict cells")
-        btn_predict.clicked.connect(self.on_predict_clicked)
-        self.ui.btn_predict = btn_predict
+        self.ui.btn_predict = QPushButton("Predict cells")
+        self.ui.btn_predict.clicked.connect(self.on_predict_clicked)
 
-        btn_clear = QPushButton("Clear")
-        btn_clear.clicked.connect(lambda checked=False: self.on_clear_clicked())
-        self.ui.btn_clear = btn_clear
+        self.ui.btn_clear = QPushButton("Clear")
+        self.ui.btn_clear.clicked.connect(lambda checked=False: self.on_clear_clicked())
 
-        for i, j in zip([0, 1, 2], [btn_load, btn_predict, btn_clear]):
+        for i, j in zip(
+            [0, 1, 2], [self.ui.btn_load, self.ui.btn_predict, self.ui.btn_clear]
+        ):
 
             self.layout.insertWidget(i, j)
 
     def set_loading_image_ui(self):
 
         # Remove 'Load images' button from viewer
-        btn_load = self.ui.btn_load
-        assert btn_load is not None
-        self.layout.removeWidget(btn_load)
-        btn_load.hide()
-        btn_load.deleteLater()
+        self.layout.removeWidget(self.ui.btn_load)
+        self.ui.btn_load.hide()
+        self.ui.btn_load.deleteLater()
         self.ui.btn_load = None
 
     def set_predict_roi_ui(self, loaded_for_predict=False):
 
         # Add 'min n pix' boxes to viewer
-        box_min_area_ch0 = ParamValueBox(
+        self.ui.box_min_area_ch0 = ParamValueBox(
             label=f"min area (\u00b5m\u00b2) {self.workflow.ch_names[0]}",
             default=self.config["channels"][0]["min_area_um2"],
             min_val=0.0,
             max_val=10000.0,
         )
-        box_min_area_ch0.valueChanged.connect(
+        self.ui.box_min_area_ch0.valueChanged.connect(
             lambda x: self.on_min_area_changed(0, x)
         )
-        self.ui.box_min_area_ch0 = box_min_area_ch0
 
-        box_min_area_ch1 = ParamValueBox(
+        self.ui.box_min_area_ch1 = ParamValueBox(
             label=f"min area (\u00b5m\u00b2) {self.workflow.ch_names[1]}",
             default=self.config["channels"][1]["min_area_um2"],
             min_val=0.0,
             max_val=10000.0,
         )
-        box_min_area_ch1.valueChanged.connect(
+        self.ui.box_min_area_ch1.valueChanged.connect(
             lambda x: self.on_min_area_changed(1, x)
         )
-        self.ui.box_min_area_ch1 = box_min_area_ch1
 
-        for i, j in zip([0, 1], [box_min_area_ch0, box_min_area_ch1]):
+        for i, j in zip([0, 1], [self.ui.box_min_area_ch0, self.ui.box_min_area_ch1]):
 
             self.layout.insertWidget(i, j)
 
         if loaded_for_predict:
 
             # Disable 'min n pix' boxes
-            for i in [box_min_area_ch0, box_min_area_ch1]:
+            for i in [self.ui.box_min_area_ch0, self.ui.box_min_area_ch1]:
 
                 i.setEnabled(False)
 
@@ -1547,7 +1470,6 @@ class PluginManager(QWidget):
             # Re-enable 'Predict cells' and 'Clear' buttons
             for i in [self.ui.btn_predict, self.ui.btn_clear]:
 
-                assert i is not None
                 i.setEnabled(True)
 
     def set_predicting_roi_ui(self):
@@ -1566,15 +1488,13 @@ class PluginManager(QWidget):
     def set_apply_edits_ui(self):
 
         # Add 'Adjust size filter' and 'Apply edits' buttons to viewer if predictions are returned for the first time
-        btn_filter_size = QPushButton("Adjust size filter")
-        btn_filter_size.clicked.connect(self.on_filter_size_clicked)
-        self.ui.btn_filter_size = btn_filter_size
+        self.ui.btn_filter_size = QPushButton("Adjust size filter")
+        self.ui.btn_filter_size.clicked.connect(self.on_filter_size_clicked)
 
-        btn_apply_edits = QPushButton("Apply edits")
-        btn_apply_edits.clicked.connect(self.on_apply_edits_clicked)
-        self.ui.btn_apply_edits = btn_apply_edits
+        self.ui.btn_apply_edits = QPushButton("Apply edits")
+        self.ui.btn_apply_edits.clicked.connect(self.on_apply_edits_clicked)
 
-        for i, j in zip([2, 3], [btn_filter_size, btn_apply_edits]):
+        for i, j in zip([2, 3], [self.ui.btn_filter_size, self.ui.btn_apply_edits]):
 
             self.layout.insertWidget(i, j)
 
@@ -1588,7 +1508,6 @@ class PluginManager(QWidget):
             self.ui.btn_clear,
         ]:
 
-            assert i is not None
             i.setEnabled(True)
 
     def set_applying_edits_ui(self):
@@ -1602,66 +1521,57 @@ class PluginManager(QWidget):
         ]:
 
             j = getattr(self.ui, i, None)
-
-            if j is not None:
-
-                self.layout.removeWidget(j)
-                j.hide()
-                j.deleteLater()
-                setattr(self.ui, i, None)
+            self.layout.removeWidget(j)
+            j.hide()
+            j.deleteLater()
+            setattr(self.ui, i, None)
 
     def set_overlap_roi_ui(self):
 
         # Add 'min % ovl' boxes and 'Find overlaps' button to viewer
-        box_min_pct_ovl_ch0_by_ch1 = ParamValueBox(
+        self.ui.box_min_pct_ovl_ch0_by_ch1 = ParamValueBox(
             label=f"min % overlap {self.workflow.ch_names[0]} / {self.workflow.ch_names[1]}",
             default=self.config["min_pct_ovl_ch0_by_ch1"],
             min_val=0.0,
             max_val=100.0,
         )
-        box_min_pct_ovl_ch0_by_ch1.valueChanged.connect(
+        self.ui.box_min_pct_ovl_ch0_by_ch1.valueChanged.connect(
             lambda x: self.on_min_pct_ovl_changed("min_pct_ovl_ch0_by_ch1", x)
         )
-        self.ui.box_min_pct_ovl_ch0_by_ch1 = box_min_pct_ovl_ch0_by_ch1
 
-        box_min_pct_ovl_ch1_by_ch0 = ParamValueBox(
+        self.ui.box_min_pct_ovl_ch1_by_ch0 = ParamValueBox(
             label=f"min % overlap {self.workflow.ch_names[1]} / {self.workflow.ch_names[0]}",
             default=self.config["min_pct_ovl_ch1_by_ch0"],
             min_val=0.0,
             max_val=100.0,
         )
-        box_min_pct_ovl_ch1_by_ch0.valueChanged.connect(
+        self.ui.box_min_pct_ovl_ch1_by_ch0.valueChanged.connect(
             lambda x: self.on_min_pct_ovl_changed("min_pct_ovl_ch1_by_ch0", x)
         )
-        self.ui.box_min_pct_ovl_ch1_by_ch0 = box_min_pct_ovl_ch1_by_ch0
 
-        btn_overlap = QPushButton("Find overlaps")
-        btn_overlap.clicked.connect(self.on_overlap_clicked)
-        self.ui.btn_overlap = btn_overlap
+        self.ui.btn_overlap = QPushButton("Find overlaps")
+        self.ui.btn_overlap.clicked.connect(self.on_overlap_clicked)
 
         for i, j in zip(
             [0, 1, 2],
             [
-                box_min_pct_ovl_ch0_by_ch1,
-                box_min_pct_ovl_ch1_by_ch0,
-                btn_overlap,
+                self.ui.box_min_pct_ovl_ch0_by_ch1,
+                self.ui.box_min_pct_ovl_ch1_by_ch0,
+                self.ui.btn_overlap,
             ],
         ):
 
             self.layout.insertWidget(i, j)
 
         # Re-enable 'Clear' button
-        assert self.ui.btn_clear is not None
         self.ui.btn_clear.setEnabled(True)
 
     def set_overlapping_roi_ui(self):
 
         # Remove 'Find overlaps' button from viewer
-        btn_overlap = self.ui.btn_overlap
-        assert btn_overlap is not None
-        self.layout.removeWidget(btn_overlap)
-        btn_overlap.hide()
-        btn_overlap.deleteLater()
+        self.layout.removeWidget(self.ui.btn_overlap)
+        self.ui.btn_overlap.hide()
+        self.ui.btn_overlap.deleteLater()
         self.ui.btn_overlap = None
 
     def set_overlap_filter_or_save_ui(self, build_ui=True):
@@ -1669,37 +1579,87 @@ class PluginManager(QWidget):
         if build_ui:
 
             # Add 'Adjust overlap filter' button, 'element' boxes and 'Save results' button to viewer if overlaps are returned for the first time
-            btn_overlap_filter = QPushButton("Adjust overlap filter")
-            btn_overlap_filter.clicked.connect(self.on_overlap_filter_clicked)
-            self.ui.btn_overlap_filter = btn_overlap_filter
+            self.ui.btn_overlap_filter = QPushButton("Adjust overlap filter")
+            self.ui.btn_overlap_filter.clicked.connect(self.on_overlap_filter_clicked)
 
-            btn_save = QPushButton("Save results")
-            btn_save.clicked.connect(self.on_save_clicked)
-            self.ui.btn_save = btn_save
+            self.ui.btn_save = QPushButton("Save results")
+            self.ui.btn_save.clicked.connect(self.on_save_clicked)
 
-            # Build one element box per population, in the order the user listed
-            # them in config["elements"] so the panel reflects their chosen order.
-            box_elem_list = []
-            for p in self._populations_in_config_order():
-                box = ElementConfigBox(label=self._elem_label(p))
-                box.valueChanged.connect(
-                    lambda x, key=p.key: self.on_elem_params_changed(key, x)
-                )
-                # Clear manual selection when the spinner is edited directly.
+            plus = "\u207a"
+            minus = "\u207b"
+
+            self.ui.box_elem_ch0pos_ch1neg = ElementConfigBox(
+                label=f"{self.workflow.ch_names[0]}{plus} / {self.workflow.ch_names[1]}{minus}"
+            )
+
+            self.ui.box_elem_ch0pos_ch1neg.valueChanged.connect(
+                lambda x: self.on_elem_params_changed("ch0-pos/ch1-neg", x)
+            )
+
+            self.ui.box_elem_ch0pos_ch1pos = ElementConfigBox(
+                label=f"{self.workflow.ch_names[0]}{plus} / {self.workflow.ch_names[1]}{plus}"
+            )
+
+            self.ui.box_elem_ch0pos_ch1pos.valueChanged.connect(
+                lambda x: self.on_elem_params_changed("ch0-pos/ch1-pos", x)
+            )
+
+            self.ui.box_elem_ch1pos_ch0neg = ElementConfigBox(
+                label=f"{self.workflow.ch_names[1]}{plus} / {self.workflow.ch_names[0]}{minus}"
+            )
+
+            self.ui.box_elem_ch1pos_ch0neg.valueChanged.connect(
+                lambda x: self.on_elem_params_changed("ch1-pos/ch0-neg", x)
+            )
+
+            self.ui.box_elem_ch0pos_ch1amb = ElementConfigBox(
+                label=f"{self.workflow.ch_names[0]}{plus} / {self.workflow.ch_names[1]}-amb"
+            )
+
+            self.ui.box_elem_ch0pos_ch1amb.valueChanged.connect(
+                lambda x: self.on_elem_params_changed("ch0-pos/ch1-amb", x)
+            )
+
+            self.ui.box_elem_ch1pos_ch0amb = ElementConfigBox(
+                label=f"{self.workflow.ch_names[1]}{plus} / {self.workflow.ch_names[0]}-amb"
+            )
+
+            self.ui.box_elem_ch1pos_ch0amb.valueChanged.connect(
+                lambda x: self.on_elem_params_changed("ch1-pos/ch0-amb", x)
+            )
+
+            box_elem_dict = {
+                "ch0-pos/ch1-neg": self.ui.box_elem_ch0pos_ch1neg,
+                "ch0-pos/ch1-pos": self.ui.box_elem_ch0pos_ch1pos,
+                "ch1-pos/ch0-neg": self.ui.box_elem_ch1pos_ch0neg,
+                "ch0-pos/ch1-amb": self.ui.box_elem_ch0pos_ch1amb,
+                "ch1-pos/ch0-amb": self.ui.box_elem_ch1pos_ch0amb,
+            }
+
+            pop_keys_ordered = [
+                k for k in self.config["elements"].keys() if k in box_elem_dict
+            ]
+
+            box_elem_list = [box_elem_dict[k] for k in pop_keys_ordered]
+
+            # Connect nCollectChanged to clear manual selection when spinner is edited directly
+            for pop_key, box in zip(pop_keys_ordered, box_elem_list):
                 box.nCollectChanged.connect(
-                    lambda n, key=p.key: self._on_n_collect_changed(key)
+                    lambda n, pk=pop_key: self._on_n_collect_changed(pk)
                 )
-                # Wire the box's built-in "Choose ROIs" button (it lives inside the
-                # element box, so no extra rows are added to the panel).
+
+            # Wire each box's built-in "Choose ROIs" button (the button lives inside
+            # the element box, so no extra rows are added to the panel)
+            for pop_key, box in zip(pop_keys_ordered, box_elem_list):
                 box.btn_choose_rois.clicked.connect(
-                    lambda checked=False, key=p.key: self._on_select_cells_clicked(key)
+                    lambda checked=False, pk=pop_key: self._on_select_cells_clicked(pk)
                 )
-                self.ui.box_elems[p.key] = box
-                self.ui.btns_select_cells[p.key] = box.btn_choose_rois
-                box_elem_list.append(box)
+                self.ui.btns_select_cells[pop_key] = box.btn_choose_rois
 
             # Insert widgets: btn_overlap_filter, element boxes, btn_save
-            widgets_to_insert = [btn_overlap_filter] + box_elem_list + [btn_save]
+            widgets_to_insert = (
+                [self.ui.btn_overlap_filter] + box_elem_list + [self.ui.btn_save]
+            )
 
             for i, w in enumerate(widgets_to_insert):
                 self.layout.insertWidget(2 + i, w)
@@ -1710,12 +1670,15 @@ class PluginManager(QWidget):
             self.ui.box_min_pct_ovl_ch0_by_ch1,
             self.ui.box_min_pct_ovl_ch1_by_ch0,
             self.ui.btn_overlap_filter,
-            *self.ui.box_elems.values(),
+            self.ui.box_elem_ch0pos_ch1neg,
+            self.ui.box_elem_ch0pos_ch1pos,
+            self.ui.box_elem_ch1pos_ch0neg,
+            self.ui.box_elem_ch0pos_ch1amb,
+            self.ui.box_elem_ch1pos_ch0amb,
             self.ui.btn_save,
             self.ui.btn_clear,
         ]:
 
-            assert i is not None
             i.setEnabled(True)
 
         for btn in self.ui.btns_select_cells.values():
@@ -1738,6 +1701,11 @@ class PluginManager(QWidget):
             "btn_overlap_filter",
             "box_min_pct_ovl_ch0_by_ch1",
             "box_min_pct_ovl_ch1_by_ch0",
+            "box_elem_ch0pos_ch1neg",
+            "box_elem_ch0pos_ch1pos",
+            "box_elem_ch0pos_ch1amb",
+            "box_elem_ch1pos_ch0neg",
+            "box_elem_ch1pos_ch0amb",
             "btn_save",
         ]:
 
@@ -1749,13 +1717,6 @@ class PluginManager(QWidget):
                 j.hide()
                 j.deleteLater()
                 setattr(self.ui, i, None)
-
-        # Tear down the per-population element boxes (held in a dict, not named attrs).
-        for box in self.ui.box_elems.values():
-            self.layout.removeWidget(box)
-            box.hide()
-            box.deleteLater()
-        self.ui.box_elems.clear()
 
         # The "Choose ROIs" buttons live inside the element boxes and are destroyed
         # together with them above; just drop the references.
@@ -1911,10 +1872,6 @@ class PluginManager(QWidget):
 
         self.set_workflow_state(state=WorkflowState.LOAD_IMAGE)
 
-        # Display the selected file name above the button panel
-        self.file_label.setText(Path(self.workflow.path).stem)
-        self.file_label.setVisible(True)
-
         self.set_message(".zvi file selected", MessageLevel.INFO)
 
     def on_clear_clicked(self, *args):
@@ -1935,9 +1892,6 @@ class PluginManager(QWidget):
         self.reset_viewer_layers()
 
         self.set_workflow_state(state=WorkflowState.SELECT_FILE)
-
-        self.file_label.setText("")
-        self.file_label.setVisible(False)
 
         self.set_message("", MessageLevel.NONE)
 
@@ -2020,7 +1974,7 @@ class PluginManager(QWidget):
             self.set_workflow_state(state=WorkflowState.PREDICT_ROI)
 
             self.set_message(
-                "Image loaded",
+                "Check images in viewer\n\nAdjust min size thresholds (optional)\n\nClic 'Predict cells' when ready",
                 MessageLevel.CHECK,
             )
 
@@ -2080,7 +2034,7 @@ class PluginManager(QWidget):
         self.set_workflow_state(state=WorkflowState.APPLY_EDITS)
 
         self.set_message(
-            "Prediction finished",
+            "Check images in viewer\n\nEdit cell contours (optional)\n\nClic 'Apply edits' when finished",
             MessageLevel.CHECK,
         )
 
@@ -2139,7 +2093,7 @@ class PluginManager(QWidget):
         self.set_workflow_state(state=WorkflowState.OVERLAP_ROI)
 
         self.set_message(
-            "Edits applied",
+            "Adjust overlap thresholds (optional)\n\nClic 'Find overlaps' when ready",
             MessageLevel.CHECK,
         )
 
@@ -2209,7 +2163,10 @@ class PluginManager(QWidget):
                 state=WorkflowState.UPDATE_OVERLAP_FILTER_OR_SAVE, force=True
             )
 
-        self._refresh_selection_summary()
+        self.set_message(
+            "Adjust element list parameters (optional)\n\nClic 'Save results' when finished",
+            MessageLevel.CHECK,
+        )
 
     def on_save_clicked(self):
 
@@ -2260,47 +2217,55 @@ class PluginManager(QWidget):
             MessageLevel.SAVE,
         )
 
+        ch0_nm = self.workflow.ch_names[0]
+        ch1_nm = self.workflow.ch_names[1]
+        ch0_summary = self.workflow.data[ch0_nm]["summary"]
+        ch1_summary = self.workflow.data[ch1_nm]["summary"]
+        plus = "\u207a"
+        minus = "\u207b"
+
+        summary_dict = {
+            "ch0-pos/ch1-neg": f"- {ch0_nm}{plus} / {ch1_nm}{minus}: {ch0_summary['neg_collect']} / {ch0_summary['neg']} ({ch0_summary['neg_tube_id']})",
+            "ch0-pos/ch1-pos": f"- {ch0_nm}{plus} / {ch1_nm}{plus}: {ch0_summary['pos_collect']} / {ch0_summary['pos']} ({ch0_summary['pos_tube_id']})",
+            "ch1-pos/ch0-neg": f"- {ch1_nm}{plus} / {ch1_nm}{minus}: {ch1_summary['neg_collect']} / {ch1_summary['neg']} ({ch1_summary['neg_tube_id']})",
+            "ch0-pos/ch1-amb": f"- {ch0_nm}{plus} / {ch1_nm}-amb: {ch0_summary['amb_collect']} / {ch0_summary['amb']} ({ch0_summary['amb_tube_id']})",
+            "ch1-pos/ch0-amb": f"- {ch1_nm}{plus} / {ch1_nm}-amb: {ch1_summary['amb_collect']} / {ch1_summary['amb']} ({ch1_summary['amb_tube_id']})",
+        }
+
+        summary_dict = {
+            k: summary_dict[k]
+            for k in self.config["elements"].keys()
+            if k in summary_dict.keys()
+        }
+
         print(f"Collect / omit summary - {self.workflow.metadata['img_nm']}:\n")
 
-        for p in self._populations_in_config_order():
-            ch_summary = self.workflow.data[self.workflow.ch_names[p.primary_ch]][
-                "summary"
-            ]
-            print(
-                f"- {self._elem_label(p)}: "
-                f"{ch_summary[f'{p.status}_collect']} / {ch_summary[p.status]} "
-                f"({ch_summary[f'{p.status}_tube_id']})"
-            )
+        for k in summary_dict.keys():
+            print(summary_dict[k])
 
         print("\n")
 
-    def _populations_in_config_order(self) -> list[Population]:
-        """Populations ordered as the user listed them in config['elements']."""
-        return [
-            POPULATION_BY_KEY[k]
-            for k in self.config["elements"].keys()
-            if k in POPULATION_BY_KEY
-        ]
+    def _get_elem_box(self, pop_key: str):
+        return {
+            "ch0-pos/ch1-neg": self.ui.box_elem_ch0pos_ch1neg,
+            "ch0-pos/ch1-pos": self.ui.box_elem_ch0pos_ch1pos,
+            "ch1-pos/ch0-neg": self.ui.box_elem_ch1pos_ch0neg,
+            "ch0-pos/ch1-amb": self.ui.box_elem_ch0pos_ch1amb,
+            "ch1-pos/ch0-amb": self.ui.box_elem_ch1pos_ch0amb,
+        }[pop_key]
 
-    def _elem_label(self, p: Population) -> str:
-        """Build a population's display label, e.g. 'TH⁺ / pSyn⁻' or 'TH⁺ / pSyn-amb'."""
-        plus = "⁺"
-        minus = "⁻"
-        suffix = {"neg": minus, "pos": plus, "amb": "-amb"}[p.status]
-        primary = self.workflow.ch_names[p.primary_ch]
-        secondary = self.workflow.ch_names[1 - p.primary_ch]
-        return f"{primary}{plus} / {secondary}{suffix}"
-
-    def _get_elem_box(self, pop_key: str) -> ElementConfigBox:
-        # Only called once the element boxes have been built (OVERLAP_FILTER_OR_SAVE).
-        box = self.ui.box_elems.get(pop_key)
-        assert box is not None
-        return box
+    def _get_pop_ch_status(self, pop_key: str):
+        ch0_nm = self.workflow.ch_names[0]
+        ch1_nm = self.workflow.ch_names[1]
+        return {
+            "ch0-pos/ch1-neg": (ch0_nm, "neg"),
+            "ch0-pos/ch1-pos": (ch0_nm, "pos"),
+            "ch1-pos/ch0-neg": (ch1_nm, "neg"),
+            "ch0-pos/ch1-amb": (ch0_nm, "amb"),
+            "ch1-pos/ch0-amb": (ch1_nm, "amb"),
+        }[pop_key]
 
     def _on_n_collect_changed(self, pop_key: str):
-        # Drops any manual selection when the spinner is edited directly. The
-        # summary is refreshed by on_elem_params_changed, which fires right
-        # after this on the same spin_n.valueChanged signal.
         if pop_key in self._manual_selections:
             self._manual_selections.pop(pop_key)
             if pop_key in self.ui.btns_select_cells:
@@ -2308,10 +2273,9 @@ class PluginManager(QWidget):
 
     def _on_select_cells_clicked(self, pop_key: str):
 
-        p = POPULATION_BY_KEY[pop_key]
-        status = p.status
-        ch_nm = self.workflow.ch_names[p.primary_ch]
-        ch_other_nm = self.workflow.ch_names[1 - p.primary_ch]
+        ch_nm, status = self._get_pop_ch_status(pop_key)
+        ch_idx = next(k for k, v in self.workflow.ch_names.items() if v == ch_nm)
+        ch_other_nm = self.workflow.ch_names[1 - ch_idx]
 
         cnts = self.workflow.data[ch_nm]["cnts"][status]
         status_dict = self.workflow.data[ch_nm][f"{ch_other_nm}_status"][status]
@@ -2338,63 +2302,12 @@ class PluginManager(QWidget):
 
         if dialog.exec_():
             selected = dialog.selected_ids()
-
-            # Treat an unchanged selection like a cancel: leave state and the
-            # "Results saved" message untouched.
-            if selected == initial_selected:
-                return
-
             self._manual_selections[pop_key] = selected
 
             box = self._get_elem_box(pop_key)
             box.spin_n.blockSignals(True)
             box.spin_n.setValue(len(selected))
             box.spin_n.blockSignals(False)
-
-            self._refresh_selection_summary()
-
-    def _pop_selection_summary(self, pop_key: str):
-        """Return (n_selected, summed_area_um2) for the current selection of pop_key.
-
-        Mirrors the selection logic of the "Choose ROIs" dialog: a manual
-        selection if one exists, otherwise the top-N ranked cells per the
-        element box's 'n collect' value.
-        """
-        p = POPULATION_BY_KEY[pop_key]
-        status = p.status
-        ch_nm = self.workflow.ch_names[p.primary_ch]
-        ch_other_nm = self.workflow.ch_names[1 - p.primary_ch]
-
-        cnts = self.workflow.data[ch_nm]["cnts"][status]
-        status_dict = self.workflow.data[ch_nm][f"{ch_other_nm}_status"][status]
-
-        if pop_key in self._manual_selections:
-            selected = self._manual_selections[pop_key]
-        else:
-            n_collect = self._get_elem_box(pop_key).spin_n.value()
-            selected = set(list(cnts.keys())[:n_collect])
-
-        px_area_um2 = self.workflow.metadata["image"]["px_area_um2"]
-        total_area = sum(
-            status_dict.get(cell_id, {}).get("area", 0) * px_area_um2
-            for cell_id in selected
-        )
-
-        return len(selected), total_area
-
-    def _selection_summary_message(self):
-        """Build a message summarising selected ROI count and area per population."""
-        lines = ["Selection summary:\n"]
-        for p in self._populations_in_config_order():
-            n, area = self._pop_selection_summary(p.key)
-            base_label = self._get_elem_box(p.key).base_label
-            lines.append(f"- {base_label}: {n} ROIs  |  {area:.0f} µm²")
-
-        return "\n".join(lines)
-
-    def _refresh_selection_summary(self):
-        """Re-render the per-population selection summary in the message box."""
-        self.set_message(self._selection_summary_message(), MessageLevel.CHECK)
 
     def on_min_area_changed(self, key: int, value: float):
 
@@ -2408,55 +2321,98 @@ class PluginManager(QWidget):
 
         self.config["elements"][key].update(values)
 
-        self._refresh_selection_summary()
-
     def update_elem_boxes(self):
 
-        for p in POPULATIONS:
+        primary_channel_id = [0, 0, 1, 0, 1]
 
-            box = self.ui.box_elems.get(p.key)
+        secondary_channel_status = ["neg", "pos", "neg", "amb", "amb"]
 
-            if box is None:
-                continue
+        population = [
+            "ch0-pos/ch1-neg",
+            "ch0-pos/ch1-pos",
+            "ch1-pos/ch0-neg",
+            "ch0-pos/ch1-amb",
+            "ch1-pos/ch0-amb",
+        ]
 
-            ch_summary = self.workflow.data[self.workflow.ch_names[p.primary_ch]][
-                "summary"
-            ]
-            elem_cfg = self.config["elements"][p.key]
+        box = [
+            self.ui.box_elem_ch0pos_ch1neg,
+            self.ui.box_elem_ch0pos_ch1pos,
+            self.ui.box_elem_ch1pos_ch0neg,
+            self.ui.box_elem_ch0pos_ch1amb,
+            self.ui.box_elem_ch1pos_ch0amb,
+        ]
 
-            max_n_collect = ch_summary[p.status]
-            n_collect = max_n_collect if elem_cfg["collect"] is True else 0
+        for i, j, k, l in zip(
+            primary_channel_id, secondary_channel_status, population, box
+        ):
 
-            box.label.setText(f"{box.base_label} ({max_n_collect} total)")
-            box.label.setStyleSheet(f"font-weight: bold; color: {elem_cfg['color']}")
+            max_n_collect = self.workflow.data[self.workflow.ch_names[i]]["summary"][j]
 
-            box.spin_n.blockSignals(True)
-            box.spin_n.setMaximum(max_n_collect)
-            box.spin_n.setValue(n_collect)
-            box.spin_n.blockSignals(False)
+            n_collect = (
+                max_n_collect if self.config["elements"][k]["collect"] is True else 0
+            )
 
-            box.combo_laser.blockSignals(True)
-            box.combo_laser.setCurrentText(elem_cfg["laser_function"])
-            box.combo_laser.blockSignals(False)
+            laser_function = self.config["elements"][k]["laser_function"]
 
-            box.combo_tube.blockSignals(True)
-            box.combo_tube.setCurrentText(elem_cfg["tube_id"])
-            box.combo_tube.blockSignals(False)
+            tube_id = self.config["elements"][k]["tube_id"]
+
+            color = self.config["elements"][k]["color"]
+
+            if l is not None:
+
+                base_label = l.base_label
+                label = l.label
+                label.setText(f"{base_label} ({max_n_collect})")
+                label.setStyleSheet(f"font-weight: bold; color: {color}")
+
+                spin_n = l.spin_n
+                spin_n.blockSignals(True)
+                spin_n.setMaximum(max_n_collect)
+                spin_n.setValue(n_collect)
+                spin_n.blockSignals(False)
+
+                combo_laser = l.combo_laser
+                combo_laser.blockSignals(True)
+                combo_laser.setCurrentText(laser_function)
+                combo_laser.blockSignals(False)
+
+                combo_tube = l.combo_tube
+                combo_tube.blockSignals(True)
+                combo_tube.setCurrentText(tube_id)
+                combo_tube.blockSignals(False)
 
     def read_elem_boxes(self):
 
-        for p in POPULATIONS:
+        primary_channel_id = [0, 0, 1, 0, 1]
 
-            box = self.ui.box_elems.get(p.key)
-            assert box is not None
+        secondary_channel_status = ["neg", "pos", "neg", "amb", "amb"]
 
-            ch_summary = self.workflow.data[self.workflow.ch_names[p.primary_ch]][
-                "summary"
-            ]
+        box = [
+            self.ui.box_elem_ch0pos_ch1neg,
+            self.ui.box_elem_ch0pos_ch1pos,
+            self.ui.box_elem_ch1pos_ch0neg,
+            self.ui.box_elem_ch0pos_ch1amb,
+            self.ui.box_elem_ch1pos_ch0amb,
+        ]
 
-            ch_summary[f"{p.status}_collect"] = box.spin_n.value()
-            ch_summary[f"{p.status}_laser_function"] = box.combo_laser.currentText()
-            ch_summary[f"{p.status}_tube_id"] = box.combo_tube.currentText()
+        for i, j, k in zip(primary_channel_id, secondary_channel_status, box):
+
+            n_collect = k.spin_n.value()
+            laser_function = k.combo_laser.currentText()
+            tube_id = k.combo_tube.currentText()
+
+            self.workflow.data[self.workflow.ch_names[i]]["summary"][
+                f"{j}_collect"
+            ] = n_collect
+
+            self.workflow.data[self.workflow.ch_names[i]]["summary"][
+                f"{j}_laser_function"
+            ] = laser_function
+
+            self.workflow.data[self.workflow.ch_names[i]]["summary"][
+                f"{j}_tube_id"
+            ] = tube_id
 
         self.workflow.data[self.workflow.ch_names[0]]["summary"] = {
             k: self.workflow.data[self.workflow.ch_names[0]]["summary"][k]
