@@ -15,6 +15,10 @@ venv/
 # OS files
 .DS_Store
 
+# StarDist models
+src/napari_bruce/stardist_models/2026.04.21_stardist_th_cam/
+src/napari_bruce/stardist_models/2026.04.21_stardist_psyn_cam/ 
+
 # Claude files
 .claude
 CLAUDE.md

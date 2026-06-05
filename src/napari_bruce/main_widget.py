@@ -34,9 +34,9 @@ from qtpy.QtWidgets import (
 from qtpy.QtCore import Signal, QObject, QThread, Qt
 from qtpy.QtGui import QColor
 from typing import TYPE_CHECKING
-from dataclasses import dataclass
 from . import configuration
 from . import workflow
+from .workflow import Population, POPULATIONS, POPULATION_BY_KEY
 
 if TYPE_CHECKING:
     import napari
@@ -84,36 +84,6 @@ class ViewerState(Enum):
     IMAGE_LOADED = auto()
     ROI_EDITING = auto()
     LOCKED = auto()
-
-
-# %% Population descriptors ----
-
-
-@dataclass(frozen=True)
-class Population:
-    """A single cross-channel population (one element box / one element list).
-
-    Single source of truth for the five populations, replacing the per-site
-    parallel lists and key→value dicts scattered across the widget.
-    """
-
-    key: str  # matches a config["elements"] key, e.g. "ch0-pos/ch1-neg"
-    primary_ch: int  # 0 or 1: the channel the cells are positive for
-    status: str  # "neg" | "pos" | "amb": the secondary channel's overlap status
-
-
-# Ordered by (primary_ch, status) so iterating reproduces the legacy contour
-# draw order in the merge image. Display order is driven separately by
-# _populations_in_config_order(); all other sites are order-agnostic.
-POPULATIONS = (
-    Population("ch0-pos/ch1-neg", 0, "neg"),
-    Population("ch0-pos/ch1-pos", 0, "pos"),
-    Population("ch0-pos/ch1-amb", 0, "amb"),
-    Population("ch1-pos/ch0-neg", 1, "neg"),
-    Population("ch1-pos/ch0-amb", 1, "amb"),
-)
-
-POPULATION_BY_KEY = {p.key: p for p in POPULATIONS}
 
 
 # %% ControlState() ----
@@ -442,7 +412,8 @@ class LoadModelWorker(BaseWorker):
                 else:
 
                     stardist_models_dir_path = Path(
-                        str(importlib.resources.files("napari_bruce")), "stardist_models"
+                        str(importlib.resources.files("napari_bruce")),
+                        "stardist_models",
                     )
 
                     models[i] = StarDist2D(
@@ -1515,9 +1486,7 @@ class PluginManager(QWidget):
             min_val=0.0,
             max_val=10000.0,
         )
-        box_min_area_ch0.valueChanged.connect(
-            lambda x: self.on_min_area_changed(0, x)
-        )
+        box_min_area_ch0.valueChanged.connect(lambda x: self.on_min_area_changed(0, x))
         self.ui.box_min_area_ch0 = box_min_area_ch0
 
         box_min_area_ch1 = ParamValueBox(
@@ -1526,9 +1495,7 @@ class PluginManager(QWidget):
             min_val=0.0,
             max_val=10000.0,
         )
-        box_min_area_ch1.valueChanged.connect(
-            lambda x: self.on_min_area_changed(1, x)
-        )
+        box_min_area_ch1.valueChanged.connect(lambda x: self.on_min_area_changed(1, x))
         self.ui.box_min_area_ch1 = box_min_area_ch1
 
         for i, j in zip([0, 1], [box_min_area_ch0, box_min_area_ch1]):
@@ -2222,8 +2189,9 @@ class PluginManager(QWidget):
             self.workflow.metadata["img_nm"],
         )
 
-        # Construct element lists and write to file
-        self.elem_list = workflow.make_elem_txt(
+        # Resolve per-ROI element metadata + old-ID -> new-ID correspondence, then
+        # format the element lists for writing.
+        elem_records, roi_id_map = workflow.make_elem_metadata(
             data_dict=self.workflow.data,
             metadata_dict=self.workflow.metadata,
             config_dict=self.config,
@@ -2236,10 +2204,16 @@ class PluginManager(QWidget):
             ),
         )
 
+        self.elem_list = workflow.make_elem_list(elem_records, self.workflow.metadata)
+
         for k in self.elem_list.keys():
 
             with open(Path(out_dir_path, f"elem_list_{k}.txt"), "w") as f:
                 f.write(self.elem_list[k])
+
+        # Record the old-ID -> new-element-ID / collect-omit correspondence so it
+        # is persisted alongside the data.
+        self.workflow.data["roi_id_map"] = roi_id_map
 
         # Write data and metadata to file
         workflow.pickle_data(

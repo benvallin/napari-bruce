@@ -9,11 +9,42 @@ import numpy as np
 import subprocess
 import shutil
 import importlib.resources
-from itertools import groupby, chain
+from itertools import groupby
 from pathlib import Path
 from datetime import datetime
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any
+
+# %% Population descriptors ----
+
+
+@dataclass(frozen=True)
+class Population:
+    """A single cross-channel population (one element box / one element list).
+
+    Single source of truth for the five populations, shared between the element
+    list/metadata code here and the widget (main_widget imports these).
+    """
+
+    key: str  # matches a config["elements"] key, e.g. "ch0-pos/ch1-neg"
+    primary_ch: int  # 0 or 1: the channel the cells are positive for
+    status: str  # "neg" | "pos" | "amb": the secondary channel's overlap status
+
+
+# Ordered by (primary_ch, status) so iterating reproduces the legacy contour draw
+# order in the merge image. Display/output order is driven separately by config
+# order (main_widget._populations_in_config_order / make_elem_metadata pop_order).
+POPULATIONS = (
+    Population("ch0-pos/ch1-neg", 0, "neg"),
+    Population("ch0-pos/ch1-pos", 0, "pos"),
+    Population("ch0-pos/ch1-amb", 0, "amb"),
+    Population("ch1-pos/ch0-neg", 1, "neg"),
+    Population("ch1-pos/ch0-amb", 1, "amb"),
+)
+
+POPULATION_BY_KEY = {p.key: p for p in POPULATIONS}
+
 
 # %% robust_normalization() ----
 
@@ -1012,10 +1043,35 @@ def format_elem_cnt(
     return output
 
 
-# %% make_elem_txt() ----
+# %% make_elem_metadata() / make_elem_list() ----
 
 
-def make_elem_txt(
+@dataclass
+class ElemRoi:
+    """Fully-resolved properties of a single element-list ROI.
+
+    One flat record carrying everything needed both to format the PALMRobo .txt
+    and to build the roi_id_map, so the per-ROI fields never live in separate
+    index-aligned lists.
+    """
+
+    population: str  # config["elements"] key, e.g. "ch0-pos/ch1-neg"
+    channel: str  # primary channel name
+    status: str  # "neg" | "pos" | "amb"
+    label: str  # e.g. "TH-pos/pSyn-neg"
+    base_id: int  # original StarDist/edited cell ID
+    ranked_id: int  # 1-based rank within the population
+    collected: bool  # collected (True) or omitted (False)
+    contour: np.ndarray
+    area: float
+    color: str
+    laser_function: str
+    tube_id: str
+    comment: str  # "<label> #<k> - COLLECT/OMIT"
+    overall_id: int = -1  # element-list ID; assigned globally after gathering
+
+
+def make_elem_metadata(
     data_dict: dict,
     metadata_dict: dict,
     config_dict: dict,
@@ -1030,25 +1086,139 @@ def make_elem_txt(
         "ch1-pos/ch0-amb",
     ),
     selected_ids_override: dict | None = None,
-) -> dict:
-    """Create string with PALM element properties.
+) -> tuple[list[ElemRoi], dict]:
+    """Resolve per-ROI element properties and the old-ID -> new-ID correspondence.
+
+    Gathers one ElemRoi record per ROI (contour, area, color, laser, tube,
+    collect/omit decision, comment) and assigns the element-list IDs. Records are
+    ordered by population (pop_order) and ranked within each population, matching
+    the order written to the element .txt files.
 
     Args:
       data_dict (dict): dict of image data.
       metadata_dict (dict): dict of image metadata.
       config_dict (dict): dict of configuration parameters.
-      cnts_key (str): name of contours key in data_dict.
-      submsks_area_um2_key (str): name of submask area (um2) key in data_dict.
-      pop_order (tuple) = names of populations in desired order.
+      summary_key, cnts_key, submsks_area_um2_key (str): key names in data_dict.
+      pop_order (tuple): population keys in desired output order.
+      selected_ids_override (dict | None): optional {pop_key: set(base_id)} of the
+        user's manual ROI selection; when absent the top-'n_collect' are collected.
 
     Returns:
-      dict: dict of string objects ("all", "collect", "omit") with PALM element properties to be written to .txt file.
+      tuple: (records, roi_id_map) where
+        records (list[ElemRoi]): per-ROI records, globally numbered.
+        roi_id_map (dict): per-population mapping keyed by population, each holding
+          'channel', 'status', 'label' and a 'rois' list of
+          {'base_id', 'ranked_id', 'overall_id', 'collected'} records. 'overall_id'
+          matches the numbering written to the element .txt files.
+    """
 
+    ch_nm = (metadata_dict["channels"][0]["name"], metadata_dict["channels"][1]["name"])
+
+    populations = {
+        p.key: (
+            ch_nm[p.primary_ch],
+            p.status,
+            f"{ch_nm[p.primary_ch]}-pos/{ch_nm[1 - p.primary_ch]}-{p.status}",
+        )
+        for p in POPULATIONS
+    }
+    populations = {k: populations[k] for k in pop_order if k in populations} | {
+        k: v for k, v in populations.items() if k not in pop_order
+    }
+
+    # Pass 1: gather one record per ROI, in population order and ranked within.
+    records: list[ElemRoi] = []
+    for pop_key, (channel, status, label) in populations.items():
+        summary = data_dict[channel][summary_key]
+        cnts = data_dict[channel][cnts_key][status]
+        areas = data_dict[channel][submsks_area_um2_key]
+        pop_ids = list(cnts.keys())
+
+        color = config_dict["elements"][pop_key]["color"]
+        laser_function = summary[f"{status}_laser_function"]
+        tube_id = summary[f"{status}_tube_id"]
+
+        if selected_ids_override and pop_key in selected_ids_override:
+            selected = selected_ids_override[pop_key]
+            cf = [cell_id in selected for cell_id in pop_ids]
+        else:
+            n_collect = summary[f"{status}_collect"]
+            cf = [True] * n_collect + [False] * (len(pop_ids) - n_collect)
+
+        n_selected = sum(cf)
+        c_idx, o_idx = 0, 0
+        for ranked_id, (base_id, is_collect) in enumerate(zip(pop_ids, cf), start=1):
+            if is_collect:
+                c_idx += 1
+                comment = f"{label} #{c_idx} - COLLECT"
+            else:
+                o_idx += 1
+                comment = f"{label} #{n_selected + o_idx} - OMIT"
+
+            records.append(
+                ElemRoi(
+                    population=pop_key,
+                    channel=channel,
+                    status=status,
+                    label=label,
+                    base_id=int(base_id),
+                    ranked_id=ranked_id,
+                    collected=bool(is_collect),
+                    contour=cnts[base_id],
+                    area=np.round(areas[base_id], 1),
+                    color=color,
+                    laser_function=laser_function,
+                    tube_id=tube_id,
+                    comment=comment,
+                )
+            )
+
+    # Pass 2: assign global element-list IDs. Collected ROIs are numbered
+    # 1..N_collect (population order), omitted ROIs continue at N_collect+1.
+    n_collect_total = sum(r.collected for r in records)
+    c_idx, o_idx = 0, 0
+    for r in records:
+        if r.collected:
+            c_idx += 1
+            r.overall_id = c_idx
+        else:
+            o_idx += 1
+            r.overall_id = n_collect_total + o_idx
+
+    # Lean, per-population correspondence table for persistence in data.pkl.
+    # Seed every population (including those with no ROIs) so all keys are present.
+    roi_id_map: dict = {
+        pop_key: {"channel": channel, "status": status, "label": label, "rois": []}
+        for pop_key, (channel, status, label) in populations.items()
+    }
+    for r in records:
+        roi_id_map[r.population]["rois"].append(
+            {
+                "base_id": r.base_id,
+                "ranked_id": r.ranked_id,
+                "overall_id": r.overall_id,
+                "collected": r.collected,
+            }
+        )
+
+    return records, roi_id_map
+
+
+def make_elem_list(records: list[ElemRoi], metadata_dict: dict) -> dict:
+    """Format resolved ElemRoi records into PALMRobo element-list .txt strings.
+
+    Args:
+      records (list[ElemRoi]): output of make_elem_metadata().
+      metadata_dict (dict): dict of image metadata.
+
+    Returns:
+      dict: string objects keyed "collect" (and "omit"/"all" when any ROI is
+        omitted) with PALM element properties to be written to .txt files.
     """
 
     import pandas as pd
 
-    date_time = datetime.now().strftime(f"%d.%m.%Y\t%H:%M:%S")
+    date_time = datetime.now().strftime("%d.%m.%Y\t%H:%M:%S")
 
     header = f"""PALMRobo Elements
 Version:	V 4.9.0.0
@@ -1060,150 +1230,48 @@ Elements :\n
 
     objective = f"{int(metadata_dict['objectives']['nominal_magnification'])}X"
 
-    ch0_nm = metadata_dict["channels"][0]["name"]
-    ch1_nm = metadata_dict["channels"][1]["name"]
+    rois_collect = [r for r in records if r.collected]
+    rois_omit = [r for r in records if not r.collected]
 
-    populations = {
-        "ch0-pos/ch1-neg": (ch0_nm, "neg", f"{ch0_nm}-pos/{ch1_nm}-neg"),
-        "ch0-pos/ch1-pos": (ch0_nm, "pos", f"{ch0_nm}-pos/{ch1_nm}-pos"),
-        "ch1-pos/ch0-neg": (ch1_nm, "neg", f"{ch1_nm}-pos/{ch0_nm}-neg"),
-        "ch0-pos/ch1-amb": (ch0_nm, "amb", f"{ch0_nm}-pos/{ch1_nm}-amb"),
-        "ch1-pos/ch0-amb": (ch1_nm, "amb", f"{ch1_nm}-pos/{ch0_nm}-amb"),
-    }
-
-    populations = {k: populations[k] for k in pop_order if k in populations} | {
-        k: v for k, v in populations.items() if k not in pop_order
-    }
-
-    n = [data_dict[k1][summary_key][k2] for k1, k2, _ in populations.values()]
-
-    n_collect = [
-        data_dict[k1][summary_key][f"{k2}_collect"]
-        for k1, k2, _ in populations.values()
-    ]
-
-    cnt = [
-        [x for x in data_dict[k1][cnts_key][k2].values()]
-        for k1, k2, _ in populations.values()
-    ]
-
-    cnt = list(chain.from_iterable(cnt))
-
-    ids = [
-        [x for x in data_dict[k1][cnts_key][k2].keys()]
-        for k1, k2, _ in populations.values()
-    ]
-
-    area = [
-        {k: v for k, v in data_dict[x[0]][submsks_area_um2_key].items()}
-        for x in populations.values()
-    ]
-
-    area = [[x[i] for i in y] for x, y in zip(area, ids)]
-
-    area = list(chain.from_iterable(area))
-
-    area = np.round(area, 1)
-
-    color = [config_dict["elements"][k]["color"] for k in populations.keys()]
-
-    color = [[i for x in range(j)] for i, j in zip(color, n)]
-
-    color = list(chain.from_iterable(color))
-
-    laser_function = [
-        data_dict[k1][summary_key][f"{k2}_laser_function"]
-        for k1, k2, _ in populations.values()
-    ]
-
-    laser_function = [[i for x in range(j)] for i, j in zip(laser_function, n)]
-
-    laser_function = list(chain.from_iterable(laser_function))
-
-    tube_id = [
-        data_dict[k1][summary_key][f"{k2}_tube_id"]
-        for k1, k2, _ in populations.values()
-    ]
-
-    tube_id = [[i for x in range(j)] for i, j in zip(tube_id, n)]
-
-    tube_id = list(chain.from_iterable(tube_id))
-
-    collect_per_pop = []
-    comment_per_pop = []
-
-    for pop_key, (_, _, label), pop_ids, nc in zip(
-        populations.keys(), populations.values(), ids, n_collect
-    ):
-        if selected_ids_override and pop_key in selected_ids_override:
-            selected = selected_ids_override[pop_key]
-            cf = [cell_id in selected for cell_id in pop_ids]
-        else:
-            cf = [True] * nc + [False] * (len(pop_ids) - nc)
-
-        collect_per_pop.append(cf)
-
-        n_selected = sum(cf)
-        c_idx, o_idx = 0, 0
-        pop_comments = []
-        for is_collect in cf:
-            if is_collect:
-                c_idx += 1
-                pop_comments.append(f"{label} #{c_idx} - COLLECT")
-            else:
-                o_idx += 1
-                pop_comments.append(f"{label} #{n_selected + o_idx} - OMIT")
-        comment_per_pop.append(pop_comments)
-
-    comment = list(chain.from_iterable(comment_per_pop))
-    collect = list(chain.from_iterable(collect_per_pop))
-
-    rois = list(zip(cnt, color, laser_function, tube_id, area, comment, collect))
-    
-    rois_collect = [i for i in rois if i[6] is True]
-    rois_omit = [i for i in rois if i[6] is False]
-    
-    if len(rois_omit) == 0:
-        
-        nm_list = ["collect"]
-        val_list = [rois_collect]
-      
+    if not rois_omit:
+        groups = {"collect": rois_collect}
     else:
-        
-        rois_all = rois_collect + rois_omit
-        nm_list = ["collect", "omit", "all"]
-        val_list = [rois_collect, rois_omit, rois_all]
+        groups = {
+            "collect": rois_collect,
+            "omit": rois_omit,
+            "all": rois_collect + rois_omit,
+        }
 
     output = {}
 
-    for nm, val in zip(nm_list, val_list):
-              
+    for nm, recs in groups.items():
+
         res = []
 
-        for i, (j, k, l, m, n, o, _) in enumerate(val):
+        for r in recs:
 
-            tmp = scale_elem_cnt(elem_cnt=j, metadata_dict=metadata_dict, to="PALM")
-
-            tmp = format_elem_cnt(
-                elem_cnt=tmp,
-                id=i + 1 if nm in ["collect", "all"] else i + 1 + len(rois_collect),
-                color=k,
-                laser_fun=l,
-                destination=m,
-                area=n,
-                comment=o,
-                objective=objective,
+            cnt = scale_elem_cnt(
+                elem_cnt=r.contour, metadata_dict=metadata_dict, to="PALM"
             )
 
-            res.append(tmp)
+            res.append(
+                format_elem_cnt(
+                    elem_cnt=cnt,
+                    id=r.overall_id,
+                    color=r.color,
+                    laser_fun=r.laser_function,
+                    destination=r.tube_id,
+                    area=r.area,
+                    comment=r.comment,
+                    objective=objective,
+                )
+            )
 
         res = pd.concat(res)
 
         res = res.to_csv(index=False, sep="\t")
 
-        res = header + res + "\n\n\n"
-
-        output[nm] = res
+        output[nm] = header + res + "\n\n\n"
 
     return output
 
