@@ -662,7 +662,9 @@ def load_ome_tiff(file: str | Path) -> tuple:
     stage_pos_equal = len(list(groupby(stage_pos.values()))) == 1
 
     if not stage_pos_equal:
-        raise ValueError("x / y stage positions are not identical for all channels!")
+        raise InvalidImageError(
+            "x / y stage positions are not identical for all channels!"
+        )
 
     metadata["image"] = {
         "size_x": pixels.size_x,
@@ -1060,7 +1062,9 @@ class ElemRoi:
     status: str  # "neg" | "pos" | "amb"
     label: str  # e.g. "TH-pos/pSyn-neg"
     base_id: int  # original StarDist/edited cell ID
-    ranked_id: int  # 1-based rank within the population
+    ranked_id: int  # 1-based rank within the population (bruce internal ranking)
+    reranked_id: int  # per-population rank after re-ranking by collect/omit; the
+    # number shown in the element-list Comment column ("<label> #<reranked_id>")
     collected: bool  # collected (True) or omitted (False)
     contour: np.ndarray
     area: float
@@ -1108,8 +1112,9 @@ def make_elem_metadata(
         records (list[ElemRoi]): per-ROI records, globally numbered.
         roi_id_map (dict): per-population mapping keyed by population, each holding
           'channel', 'status', 'label' and a 'rois' list of
-          {'base_id', 'ranked_id', 'overall_id', 'collected'} records. 'overall_id'
-          matches the numbering written to the element .txt files.
+          {'base_id', 'ranked_id', 'reranked_id', 'overall_id', 'collected'}
+          records. 'reranked_id' is the per-population number shown in the element
+          .txt Comment column; 'overall_id' is the global element-list "No" column.
     """
 
     ch_nm = (metadata_dict["channels"][0]["name"], metadata_dict["channels"][1]["name"])
@@ -1150,10 +1155,12 @@ def make_elem_metadata(
         for ranked_id, (base_id, is_collect) in enumerate(zip(pop_ids, cf), start=1):
             if is_collect:
                 c_idx += 1
-                comment = f"{label} #{c_idx} - COLLECT"
+                reranked_id = c_idx
+                comment = f"{label} #{reranked_id} - COLLECT"
             else:
                 o_idx += 1
-                comment = f"{label} #{n_selected + o_idx} - OMIT"
+                reranked_id = n_selected + o_idx
+                comment = f"{label} #{reranked_id} - OMIT"
 
             records.append(
                 ElemRoi(
@@ -1163,6 +1170,7 @@ def make_elem_metadata(
                     label=label,
                     base_id=int(base_id),
                     ranked_id=ranked_id,
+                    reranked_id=reranked_id,
                     collected=bool(is_collect),
                     contour=cnts[base_id],
                     area=np.round(areas[base_id], 1),
@@ -1196,6 +1204,7 @@ def make_elem_metadata(
             {
                 "base_id": r.base_id,
                 "ranked_id": r.ranked_id,
+                "reranked_id": r.reranked_id,
                 "overall_id": r.overall_id,
                 "collected": r.collected,
             }
@@ -1403,7 +1412,9 @@ def zvi_to_dict(
     out_dir_path_exists = out_dir_path.is_dir()
 
     # List image files
-    img_fn = list(in_dir_path.rglob("*zvi"))
+    img_fn = [
+        x for x in in_dir_path.rglob("*") if x.is_file() and x.suffix.lower() == ".zvi"
+    ]
 
     if len(img_fn) == 0:
 
