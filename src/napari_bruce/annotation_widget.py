@@ -1,5 +1,6 @@
 # %% Set up ----
 
+import os
 import pickle
 import traceback
 from pathlib import Path
@@ -81,6 +82,50 @@ class LoadPklWorker(QObject):
             self.sig_error.emit(f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
 
 
+# %% SavePklWorker ----
+
+
+class SavePklWorker(QObject):
+
+    sig_success = Signal(object)
+    sig_error = Signal(str)
+
+    def __init__(self, imgs: dict, out_path: Path, parent=None):
+
+        super().__init__(parent)
+        self.imgs = imgs
+        self.out_path = out_path
+
+    def run(self):
+
+        # Atomic save: write to a temp file in the same directory, flush it to
+        # disk, then replace the target in one step. An interrupted write thus
+        # leaves the previous imgs_annotated.pkl intact and never produces a
+        # truncated file.
+        tmp_path = self.out_path.with_name(self.out_path.name + ".tmp")
+
+        try:
+
+            with open(tmp_path, "wb") as f:
+                pickle.dump(self.imgs, f, protocol=pickle.HIGHEST_PROTOCOL)
+                f.flush()
+                os.fsync(f.fileno())
+
+            os.replace(tmp_path, self.out_path)
+
+            self.sig_success.emit(self.out_path)
+
+        except Exception as e:
+
+            # Clean up the partial temp file; never touch the real target.
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+            self.sig_error.emit(f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
+
+
 # %% _CloseEventFilter ----
 
 
@@ -95,6 +140,13 @@ class _CloseEventFilter(QObject):
 
         if event.type() == QEvent.Close:
 
+            # A save is already in flight — hold the close until it finishes.
+            if self._owner._saving:
+
+                self._owner._close_after_save = True
+                event.ignore()
+                return True
+
             if self._owner._unsaved_changes:
 
                 reply = QMessageBox.question(
@@ -107,7 +159,12 @@ class _CloseEventFilter(QObject):
 
                 if reply == QMessageBox.Save:
 
+                    # Defer the close until the async save has fully written
+                    # the data; _on_save_finished closes the window.
+                    self._owner._close_after_save = True
                     self._owner._on_save_clicked()
+                    event.ignore()
+                    return True
 
                 elif reply == QMessageBox.Cancel:
 
@@ -146,6 +203,8 @@ class AnnotationManager(QWidget):
 
         self._unsaved_changes = False
         self._loading = False
+        self._saving = False
+        self._close_after_save = False
 
         self._close_filter = _CloseEventFilter(owner=self)
         self.viewer.window._qt_window.installEventFilter(self._close_filter)
@@ -161,6 +220,20 @@ class AnnotationManager(QWidget):
 
             t.quit()
             t.wait()
+
+        # Let any in-progress save finish writing before the widget is torn
+        # down (the atomic write protects the file even if this is skipped).
+        s = getattr(self, "_save_thread", None)
+
+        try:
+
+            if isinstance(s, QThread) and s.isRunning():
+
+                s.wait()
+
+        except RuntimeError:
+
+            pass
 
         super().closeEvent(event)
 
@@ -439,16 +512,68 @@ class AnnotationManager(QWidget):
 
     def _on_save_clicked(self):
 
+        # Ignore re-entrant clicks while a save is already running.
+        if self._saving:
+
+            return
+
         self._save_current_annotations()
 
         out_path = self.out_dir_path / "imgs_annotated.pkl"
 
-        with open(out_path, "wb") as f:
-            pickle.dump(self.imgs, f, protocol=pickle.HIGHEST_PROTOCOL)
+        # Run the (potentially long) pickle write on a worker thread so the
+        # window stays responsive and cannot be force-closed as "Not
+        # Responding" mid-save.
+        self._saving = True
+        self.btn_prev.setEnabled(False)
+        self.btn_next.setEnabled(False)
+        self.btn_save.setEnabled(False)
+        self.set_message(
+            "Saving annotations — please do not close the window…",
+            MessageLevel.BUSY,
+        )
+
+        self._save_thread = QThread()
+        self._save_worker = SavePklWorker(imgs=self.imgs, out_path=out_path)
+
+        self._save_worker.moveToThread(self._save_thread)
+        self._save_thread.started.connect(self._save_worker.run)
+        self._save_worker.sig_success.connect(self._on_save_finished)
+        self._save_worker.sig_error.connect(self._on_save_error)
+        self._save_worker.sig_success.connect(self._save_thread.quit)
+        self._save_worker.sig_error.connect(self._save_thread.quit)
+        self._save_thread.finished.connect(self._save_worker.deleteLater)
+        self._save_thread.finished.connect(self._save_thread.deleteLater)
+
+        self._save_thread.start()
+
+    def _restore_buttons_after_save(self):
+
+        self._saving = False
+        self.btn_prev.setEnabled(self.idx > 0)
+        self.btn_next.setEnabled(self.idx < self.n_imgs - 1)
+        self.btn_save.setEnabled(True)
+
+    def _on_save_finished(self, out_path: Path):
 
         self._unsaved_changes = False
-
+        self._restore_buttons_after_save()
         self.set_message(f"Annotations saved to:\n{out_path}", MessageLevel.SAVE)
+
+        # If the save was triggered by a close request, close now that the
+        # data is safely on disk.
+        if self._close_after_save:
+
+            self._close_after_save = False
+            self.viewer.window._qt_window.close()
+
+    def _on_save_error(self, error_msg: str):
+
+        self._close_after_save = False
+        self._restore_buttons_after_save()
+        self.set_message(
+            f"Failed to save annotations:\n\n{error_msg}", MessageLevel.ERROR
+        )
 
 
 # %% validate_annotation_inputs() ----
