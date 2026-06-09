@@ -54,6 +54,10 @@ def list_stardist_models() -> dict:
 
         tmp = {Path(i).name: [j.name for j in i.iterdir()] for i in tmp}
 
+        # Only require the files StarDist needs to load a model for inference.
+        # Training artifacts (logs/, weights_last.h5) are intentionally not
+        # required — the bundled models ship without them to keep the wheel
+        # small, and user-added models need only these three files.
         tmp = [
             k
             for k, v in tmp.items()
@@ -62,9 +66,7 @@ def list_stardist_models() -> dict:
                 for i in [
                     "config.json",
                     "thresholds.json",
-                    "logs",
                     "weights_best.h5",
-                    "weights_last.h5",
                 ]
             )
         ]
