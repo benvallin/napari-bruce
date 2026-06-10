@@ -14,7 +14,7 @@ from pathlib import Path
 from . import configuration
 from . import workflow
 
-# %% launch_napari_with_plugin() ----
+# %% _launch_napari_with_plugin() ----
 
 
 def _is_unicode_supported():
@@ -24,7 +24,7 @@ def _is_unicode_supported():
     return "utf" in enc.lower()
 
 
-def spin_until(condition, message="Starting napari-bruce...", delay=0.08, timeout=None):
+def _spin_until(condition, message="Starting napari-bruce...", delay=0.08, timeout=None):
 
     if not sys.stdout.isatty():
 
@@ -93,7 +93,7 @@ def spin_until(condition, message="Starting napari-bruce...", delay=0.08, timeou
         sys.stdout.flush()
 
 
-def launch_napari_with_plugin(timeout=60.0):
+def _launch_napari_with_plugin(timeout=60.0):
 
     ready_file = Path(os.path.join(tempfile.gettempdir(), "napari_bruce_ready"))
 
@@ -129,7 +129,7 @@ def launch_napari_with_plugin(timeout=60.0):
 
         print("\n")
 
-        spin_until(condition=condition, timeout=timeout)
+        _spin_until(condition=condition, timeout=timeout)
 
         if ready_file.exists():
 
@@ -431,7 +431,7 @@ def cli_main(argv: list[str] | None = None) -> None:
 
             raise RuntimeError("java not found on PATH; please install OpenJDK.")
 
-        launch_napari_with_plugin()
+        _launch_napari_with_plugin()
 
     except Exception as e:
 

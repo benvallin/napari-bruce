@@ -47,14 +47,29 @@ exclude = ["napari_bruce.dev*"]
 [tool.setuptools.package-data]
 "napari_bruce" = [
   "*.yaml",
-  "config.json",
   "bioformats/bioformats_package.jar",
+
   "stardist_models/stardist_th/config.json",
   "stardist_models/stardist_th/thresholds.json",
   "stardist_models/stardist_th/weights_best.h5",
   "stardist_models/stardist_psyn/config.json",
   "stardist_models/stardist_psyn/thresholds.json",
   "stardist_models/stardist_psyn/weights_best.h5",
+
+  "stardist_models/2026.04.21_stardist_th_cam/config.json",
+  "stardist_models/2026.04.21_stardist_th_cam/thresholds.json",
+  "stardist_models/2026.04.21_stardist_th_cam/weights_best.h5",
+  "stardist_models/2026.04.21_stardist_psyn_cam/config.json",
+  "stardist_models/2026.04.21_stardist_psyn_cam/thresholds.json",
+  "stardist_models/2026.04.21_stardist_psyn_cam/weights_best.h5",
+
+  "stardist_models/2026.04.21-06.10_stardist_th_cam/config.json",
+  "stardist_models/2026.04.21-06.10_stardist_th_cam/thresholds.json",
+  "stardist_models/2026.04.21-06.10_stardist_th_cam/weights_best.h5",
+  "stardist_models/2026.04.21-06.10_stardist_psyn_cam/config.json",
+  "stardist_models/2026.04.21-06.10_stardist_psyn_cam/thresholds.json",
+  "stardist_models/2026.04.21-06.10_stardist_psyn_cam/weights_best.h5",
+
 ]
 
 [project.entry-points."napari.manifest"]

@@ -236,10 +236,10 @@ def append_shapes_to_msk(msk: np.ndarray, shapes: list, start_idx: int) -> np.nd
     return output
 
 
-# %% unify_pct_ovl_dicts() ----
+# %% _unify_pct_ovl_dicts() ----
 
 
-def unify_pct_ovl_dicts(
+def _unify_pct_ovl_dicts(
     pct_ovl_dict1: dict,
     pct_ovl_dict2: dict,
     min_pct_ovl_1by2: int | float,
@@ -410,7 +410,7 @@ def get_submsks1_submsks2_status(
 
     sec_prim_neg = {i: {"status": "neg"} for i in ids2_no_ovl}
 
-    prim_sec_ovl = unify_pct_ovl_dicts(
+    prim_sec_ovl = _unify_pct_ovl_dicts(
         pct_ovl_dict1=pct_ovl_1by2,
         pct_ovl_dict2=pct_ovl_2by1,
         min_pct_ovl_1by2=min_pct_ovl_1by2,
@@ -420,7 +420,7 @@ def get_submsks1_submsks2_status(
     prim_sec_pos = {k: v for k, v in prim_sec_ovl.items() if v["status"] == "pos"}
     prim_sec_amb = {k: v for k, v in prim_sec_ovl.items() if v["status"] == "amb"}
 
-    sec_prim_ovl = unify_pct_ovl_dicts(
+    sec_prim_ovl = _unify_pct_ovl_dicts(
         pct_ovl_dict1=pct_ovl_2by1,
         pct_ovl_dict2=pct_ovl_1by2,
         min_pct_ovl_1by2=min_pct_ovl_2by1,
@@ -698,10 +698,10 @@ def load_ome_tiff(file: str | Path) -> tuple:
     return output
 
 
-# %% txt_to_elem_dfs() ----
+# %% _txt_to_elem_dfs() ----
 
 
-def txt_to_elem_dfs(file: str) -> list:
+def _txt_to_elem_dfs(file: str) -> list:
     """Load .txt file containing PALM element properties.
 
     Args:
@@ -737,10 +737,10 @@ def txt_to_elem_dfs(file: str) -> list:
     return output
 
 
-# %% get_elem_metadata() ----
+# %% _get_elem_metadata() ----
 
 
-def get_elem_metadata(elem_df: pd.DataFrame) -> dict:
+def _get_elem_metadata(elem_df: pd.DataFrame) -> dict:
     """Extract element metadata from an element-specific pandas.DataFrame.
 
     Args:
@@ -774,10 +774,10 @@ def get_elem_metadata(elem_df: pd.DataFrame) -> dict:
     return output
 
 
-# %% get_elem_cnt() ----
+# %% _get_elem_cnt() ----
 
 
-def get_elem_cnt(elem_df: pd.DataFrame) -> np.ndarray:
+def _get_elem_cnt(elem_df: pd.DataFrame) -> np.ndarray:
     """Extract element contours from an element-specific pandas.DataFrame.
 
     Args:
@@ -811,10 +811,10 @@ def get_elem_cnt(elem_df: pd.DataFrame) -> np.ndarray:
     return output
 
 
-# %% scale_elem_cnt() ----
+# %% _scale_elem_cnt() ----
 
 
-def scale_elem_cnt(
+def _scale_elem_cnt(
     elem_cnt: np.ndarray, metadata_dict: dict, to: str = "PALM"
 ) -> np.ndarray:
     """Scale element contours to associated image.
@@ -927,10 +927,10 @@ def scale_elem_cnt(
     return output
 
 
-# %% get_palm_elem() ----
+# %% _get_palm_elem() ----
 
 
-def get_palm_elem(file: str, metadata_dict: dict) -> dict:
+def _get_palm_elem(file: str, metadata_dict: dict) -> dict:
     """Extract PALM element properties and scale to associated image.
 
     Args:
@@ -942,7 +942,7 @@ def get_palm_elem(file: str, metadata_dict: dict) -> dict:
 
     """
 
-    dfs = txt_to_elem_dfs(file=file)
+    dfs = _txt_to_elem_dfs(file=file)
 
     # Tidy metadata / element positions and return as dict
     output = {}
@@ -952,12 +952,12 @@ def get_palm_elem(file: str, metadata_dict: dict) -> dict:
         id = f"elem{str(i+1)}"
 
         # Extract metadata
-        tmp = get_elem_metadata(elem_df=dfs[i])
+        tmp = _get_elem_metadata(elem_df=dfs[i])
 
         # Clean element position
-        tmp["palm_cnt"] = get_elem_cnt(elem_df=dfs[i])
+        tmp["palm_cnt"] = _get_elem_cnt(elem_df=dfs[i])
 
-        tmp["cnt"] = scale_elem_cnt(
+        tmp["cnt"] = _scale_elem_cnt(
             elem_cnt=tmp["palm_cnt"], metadata_dict=metadata_dict, to="image"
         )
 
@@ -966,10 +966,10 @@ def get_palm_elem(file: str, metadata_dict: dict) -> dict:
     return output
 
 
-# %% format_elem_cnt() ----
+# %% _format_elem_cnt() ----
 
 
-def format_elem_cnt(
+def _format_elem_cnt(
     elem_cnt: np.ndarray,
     id: int,
     color: str,
@@ -1259,12 +1259,12 @@ Elements :\n
 
         for r in recs:
 
-            cnt = scale_elem_cnt(
+            cnt = _scale_elem_cnt(
                 elem_cnt=r.contour, metadata_dict=metadata_dict, to="PALM"
             )
 
             res.append(
-                format_elem_cnt(
+                _format_elem_cnt(
                     elem_cnt=cnt,
                     id=r.overall_id,
                     color=r.color,
@@ -1311,10 +1311,10 @@ def choose_stardist_n_tiles(
     return ny, nx
 
 
-# %% make_picklable() ----
+# %% _make_picklable() ----
 
 
-def make_picklable(data: Any) -> Any:
+def _make_picklable(data: Any) -> Any:
     """Make an object pickle-able.
 
     Args:
@@ -1373,7 +1373,7 @@ def pickle_data(data: Any, filename: str | Path) -> None:
 
     """
 
-    sanitized = make_picklable(data=data)
+    sanitized = _make_picklable(data=data)
 
     with open(filename, "wb") as f:
 

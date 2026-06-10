@@ -38,7 +38,7 @@ def list_stardist_models() -> dict:
 
     pretrained = ["2D_versatile_fluo", "2D_paper_dsb2018", "2D_demo"]
 
-    pretrained = {x: "pretrained" for x in pretrained}
+    pretrained = {x: "pretrained" for x in sorted(pretrained, key=str.lower)}
 
     user_models_dir = Path(
         os.path.join(importlib.resources.files("napari_bruce"), "stardist_models")
@@ -71,7 +71,7 @@ def list_stardist_models() -> dict:
             )
         ]
 
-        user_defined = {x: "user-defined" for x in tmp}
+        user_defined = {x: "user-defined" for x in sorted(tmp, key=str.lower)}
 
     output = {**pretrained, **user_defined}
 
@@ -120,10 +120,10 @@ def list_tube_ids() -> list:
     return output
 
 
-# %% list_channel_colors() ----
+# %% _list_channel_colors() ----
 
 
-def list_channel_colors() -> list:
+def _list_channel_colors() -> list:
     """List available channel colors.
 
     Returns:
@@ -139,10 +139,10 @@ def list_channel_colors() -> list:
     return output
 
 
-# %% list_population_colors() ----
+# %% _list_population_colors() ----
 
 
-def list_population_colors() -> list:
+def _list_population_colors() -> list:
     """List available population colors.
 
     Returns:
@@ -161,7 +161,7 @@ def list_population_colors() -> list:
     return output
 
 
-# %% check_config_integrity() ----
+# %% _check_config_integrity() ----
 
 
 class ConfigError(RuntimeError):
@@ -170,7 +170,7 @@ class ConfigError(RuntimeError):
     pass
 
 
-def check_config_integrity(config: dict) -> None:
+def _check_config_integrity(config: dict) -> None:
     """Check the integrity of the config dict.
 
     Args:
@@ -265,7 +265,7 @@ def check_config_integrity(config: dict) -> None:
 
     available_models = [k for k in list_stardist_models().keys()]
 
-    available_channel_colors = list_channel_colors()
+    available_channel_colors = _list_channel_colors()
 
     for i in config["channels"].keys():
 
@@ -303,7 +303,7 @@ def check_config_integrity(config: dict) -> None:
 
     available_tube_ids = list_tube_ids()
 
-    available_population_colors = list_population_colors()
+    available_population_colors = _list_population_colors()
 
     for i in config["elements"].keys():
 
@@ -393,7 +393,7 @@ def make_default_config() -> dict:
                 "name": "TH",
                 "low_pct": 0.05,
                 "high_pct": 99.95,
-                "stardist_model": "stardist_th",
+                "stardist_model": "2026.04.21_stardist_th_cam",
                 "min_area_um2": 100,
                 "color": "purple",
             },
@@ -401,7 +401,7 @@ def make_default_config() -> dict:
                 "name": "pSyn",
                 "low_pct": 0.05,
                 "high_pct": 99.9999,
-                "stardist_model": "stardist_psyn",
+                "stardist_model": "2026.04.21_stardist_psyn_cam",
                 "min_area_um2": 50,
                 "color": "cyan",
             },
@@ -490,7 +490,7 @@ def get_config() -> dict:
 
             raise OSError(f"Could not read config file.")
 
-        check_config_integrity(config=output)
+        _check_config_integrity(config=output)
 
         for i in ["channels", "channels_annotation"]:
             output[i] = {int(k): v for k, v in output[i].items()}

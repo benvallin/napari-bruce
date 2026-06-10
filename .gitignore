@@ -16,8 +16,21 @@ venv/
 .DS_Store
 
 # StarDist models
-src/napari_bruce/stardist_models/2026.04.21_stardist_th_cam/
-src/napari_bruce/stardist_models/2026.04.21_stardist_psyn_cam/ 
+src/napari_bruce/stardist_models/stardist_th/logs/
+src/napari_bruce/stardist_models/stardist_th/weights_last.h5
+src/napari_bruce/stardist_models/stardist_psyn/logs/
+src/napari_bruce/stardist_models/stardist_psyn/weights_last.h5
+
+src/napari_bruce/stardist_models/2026.04.21_stardist_th_cam/logs/
+src/napari_bruce/stardist_models/2026.04.21_stardist_th_cam/weights_last.h5
+src/napari_bruce/stardist_models/2026.04.21_stardist_psyn_cam/logs/
+src/napari_bruce/stardist_models/2026.04.21_stardist_psyn_cam/weights_last.h5
+
+src/napari_bruce/stardist_models/2026.04.21-06.10_stardist_th_cam/logs/          
+src/napari_bruce/stardist_models/2026.04.21-06.10_stardist_th_cam/weights_last.h5  
+src/napari_bruce/stardist_models/2026.04.21-06.10_stardist_psyn_cam/logs/          
+src/napari_bruce/stardist_models/2026.04.21-06.10_stardist_psyn_cam/weights_last.h5
+
 
 # Claude files
 .claude

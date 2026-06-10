@@ -49,10 +49,23 @@ config = configuration.get_config()
 
 # Signal program started
 ready_path = os.environ.get("NAPARI_BRUCE_READY_FILE")
-
 if ready_path:
-
     Path(ready_path).touch(exist_ok=True)
+
+# %% MessageLevel() ----
+
+
+class MessageLevel(Enum):
+
+    NONE = None
+    INFO = QStyle.SP_MessageBoxInformation
+    BUSY = QStyle.SP_BrowserReload
+    WORK = QStyle.SP_ComputerIcon
+    CHECK = QStyle.SP_ArrowRight
+    SAVE = QStyle.SP_DialogSaveButton
+    WARNING = QStyle.SP_MessageBoxWarning
+    ERROR = QStyle.SP_MessageBoxCritical
+
 
 # %% WorkflowState() ----
 
@@ -95,11 +108,9 @@ class ControlState:
     viewer_state: ViewerState | None
 
     def __init__(self):
-
         self.reset()
 
     def reset(self):
-
         self.workflow_state = None
         self.viewer_state = None
 
@@ -116,11 +127,9 @@ class WorkflowData:
     channel_mismatch: bool
 
     def __init__(self):
-
         self.reset()
 
     def reset(self):
-
         self.path = ""
         self.data = {}
         self.metadata = {}
@@ -150,11 +159,9 @@ class UIComponents:
     btns_choose_rois: dict[str, QPushButton]
 
     def __init__(self):
-
         self.reset()
 
     def reset(self):
-
         self.btn_select = None
         self.btn_clear = None
         self.btn_load = None
@@ -170,21 +177,6 @@ class UIComponents:
         self.box_min_pct_ovl_ch1_by_ch0 = None
         self.box_elems = {}
         self.btns_choose_rois = {}
-
-
-# %% MessageLevel() ----
-
-
-class MessageLevel(Enum):
-
-    NONE = None
-    INFO = QStyle.SP_MessageBoxInformation
-    BUSY = QStyle.SP_BrowserReload
-    WORK = QStyle.SP_ComputerIcon
-    CHECK = QStyle.SP_ArrowRight
-    SAVE = QStyle.SP_DialogSaveButton
-    WARNING = QStyle.SP_MessageBoxWarning
-    ERROR = QStyle.SP_MessageBoxCritical
 
 
 # %% ParamValueBox() ----
@@ -206,21 +198,22 @@ class ParamValueBox(QWidget):
 
         super().__init__(parent)
 
+        # General layout
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
 
+        # Label and spin box
         self._label = QLabel(label)
         self._spin = QDoubleSpinBox()
         self._spin.setDecimals(decimals)
         self._spin.setRange(min_val, max_val)
         self._spin.setValue(default)
-
         layout.addWidget(self._label)
         layout.addWidget(self._spin)
-
         self.setFixedHeight(QPushButton().sizeHint().height())
 
+        # Signal
         self._spin.valueChanged.connect(self.valueChanged.emit)
 
 
@@ -261,7 +254,6 @@ class ElementConfigBox(QWidget):
         # ROI selection - n collect
         row1 = QHBoxLayout()
         row1.addWidget(QLabel("n collect"))
-
         self.spin_n = QSpinBox()
         self.spin_n.setRange(min_n_collect, max_n_collect)
         self.spin_n.setValue(n_collect)
@@ -271,29 +263,24 @@ class ElementConfigBox(QWidget):
         # ROI selection - Choose ROIs
         self.btn_choose_rois = QPushButton("Choose ROIs")
         row1.addWidget(self.btn_choose_rois, stretch=1)
-
         main_layout.addLayout(row1)
 
         # Tube ID
         row2 = QHBoxLayout()
         row2.addWidget(QLabel("tube ID"))
-
         self.combo_tube = QComboBox()
         self.combo_tube.addItems(tube_options)
         self.combo_tube.setCurrentText(tube_id)
         row2.addWidget(self.combo_tube)
-
         main_layout.addLayout(row2)
 
         # Laser function
         row3 = QHBoxLayout()
         row3.addWidget(QLabel("laser function"))
-
         self.combo_laser = QComboBox()
         self.combo_laser.addItems(laser_options)
         self.combo_laser.setCurrentText(laser_function)
         row3.addWidget(self.combo_laser)
-
         main_layout.addLayout(row3)
 
         # Signals
@@ -302,21 +289,16 @@ class ElementConfigBox(QWidget):
         self.combo_tube.currentTextChanged.connect(self._emit_value)
         self.combo_laser.currentTextChanged.connect(self._emit_value)
 
-    # Methods
     def value(self) -> dict:
-
         collect = True if self.spin_n.value() > 0 else False
-
         output = {
             "collect": collect,
             "laser_function": self.combo_laser.currentText(),
             "tube_id": self.combo_tube.currentText(),
         }
-
         return output
 
     def _emit_value(self):
-
         self.valueChanged.emit(self.value())
 
 
@@ -325,18 +307,25 @@ class ElementConfigBox(QWidget):
 
 class ChooseROIsWindow(QDialog):
 
-    def __init__(self, title, rois, initial_selected, px_area_um2=1.0, parent=None):
-        """
-        rois: ordered list of (ROI ID, roi_data_dict) — best ranked first.
-        initial_selected: set of ROI IDs to pre-check.
-        roi_data_dict has 'area' (pixels) and optionally 'summary' with overlap metrics.
-        """
+    def __init__(
+        self,
+        title,
+        rois,
+        initial_selected,
+        px_area_um2=1.0,
+        ovl_key=None,
+        ovl_label="",
+        parent=None,
+    ):
+
         super().__init__(parent)
+
+        # General layout
         self.setWindowTitle(title)
         self.setMinimumSize(340, 460)
-
         layout = QVBoxLayout(self)
 
+        # Select all / none buttons
         btn_row = QHBoxLayout()
         btn_all = QPushButton("Select all")
         btn_none = QPushButton("Select none")
@@ -346,13 +335,13 @@ class ChooseROIsWindow(QDialog):
         btn_row.addWidget(btn_none)
         layout.addLayout(btn_row)
 
+        # ROI checkboxes in scroll area
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         container = QWidget()
         scroll_layout = QVBoxLayout(container)
         scroll_layout.setSpacing(2)
         scroll_layout.setContentsMargins(4, 4, 4, 4)
-
         self._checkboxes = {}
         self._areas_um2 = {}
 
@@ -360,9 +349,9 @@ class ChooseROIsWindow(QDialog):
             area_um2 = roi_data.get("area", 0) * px_area_um2
             self._areas_um2[roi_id] = area_um2
             label = f"#{rank + 1}  |  {area_um2:.0f} µm²"
-            if "summary" in roi_data:
-                ovl = roi_data["summary"].get("max_mean_pct_ovl", 0)
-                label += f"  |  {ovl:.1f}% ovl"
+            if ovl_key is not None and "summary" in roi_data:
+                ovl = roi_data["summary"].get(ovl_key, 0)
+                label += f"  |  {ovl_label} = {ovl:.1f}"
             roi_box = QCheckBox(label)
             roi_box.setChecked(roi_id in initial_selected)
             roi_box.stateChanged.connect(self._update_total_area)
@@ -373,11 +362,13 @@ class ChooseROIsWindow(QDialog):
         scroll.setWidget(container)
         layout.addWidget(scroll)
 
+        # Summary message (n selected + total area)
         self._total_area_label = QLabel()
         self._total_area_label.setStyleSheet("font-weight: bold;")
         layout.addWidget(self._total_area_label)
         self._update_total_area()
 
+        # OK / cancel buttons
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -417,26 +408,20 @@ class BaseWorker(QObject):
     sig_error = Signal(dict)
 
     def run(self):
-
         try:
-
             output = self.compute()
             self.sig_success.emit(output)
-
         except Exception as e:
-
             error_payload = {
                 "worker": type(self).__name__,
                 "exception_type": type(e).__name__,
                 "exception_message": str(e),
                 "traceback": traceback.format_exc(),
             }
-
             print(error_payload)
             self.sig_error.emit(error_payload)
 
     def compute(self):
-
         raise NotImplementedError
 
 
@@ -454,29 +439,22 @@ class LoadModelWorker(BaseWorker):
 
         os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 
+        # Set memory growth if windows + GPU
         windows = sys.platform.startswith("win")
-
         if windows:
-
             from tensorflow.config import list_physical_devices
             from tensorflow.config.experimental import set_memory_growth
 
             gpus = list_physical_devices("GPU")
-
             if gpus:
-
                 for gpu in gpus:
-
                     try:
-
                         set_memory_growth(gpu, True)
-
                     except Exception:
-
                         pass
 
+        # Load StarDist models
         with open(os.devnull, "w") as f, redirect_stdout(f), redirect_stderr(f):
-
             from stardist.models import StarDist2D
 
             pretrained = [
@@ -484,24 +462,16 @@ class LoadModelWorker(BaseWorker):
                 for k, v in configuration.list_stardist_models().items()
                 if v == "pretrained"
             ]
-
             models = {}
-
             for i in [0, 1]:
-
                 model_nm = self.config["channels"][i]["stardist_model"]
-
                 if model_nm in pretrained:
-
                     models[i] = StarDist2D.from_pretrained(model_nm)
-
                 else:
-
                     stardist_models_dir_path = Path(
                         str(importlib.resources.files("napari_bruce")),
                         "stardist_models",
                     )
-
                     models[i] = StarDist2D(
                         None, name=model_nm, basedir=stardist_models_dir_path
                     )
@@ -526,7 +496,6 @@ class LoadWorker(BaseWorker):
         out_dir_path = Path(
             Path(self.config["out_dir_path"]).expanduser(), Path(self.path).stem
         )
-
         ome_tiff_file_path = Path(out_dir_path, Path(self.path).stem + ".ome.tiff")
 
         # Convert PALM .zvi file to OME-TIFF
@@ -542,7 +511,6 @@ class LoadWorker(BaseWorker):
 
         # Subset data and metadata to the first 2 channels
         data = dict(list(raw_data.items())[:2])
-
         metadata = {
             **raw_metadata,
             "channels": dict(list(raw_metadata["channels"].items())[:2]),
@@ -550,17 +518,14 @@ class LoadWorker(BaseWorker):
 
         # For each channel...
         for i, k in enumerate(data.keys()):
-
             # Extract config
             ch_config = self.config["channels"][i]
-
             # Perform robust normalization
             norm_img = workflow.robust_normalization(
                 img=data[k]["img"],
                 low_pct=ch_config["low_pct"],
                 high_pct=ch_config["high_pct"],
             )
-
             data[k] = {**data[k], "norm_img": norm_img}
 
         return {"data": data, "metadata": metadata}
@@ -598,31 +563,23 @@ class PredictFilterWorker(BaseWorker):
 
         for k, v in self.ch_names.items():
 
+            # Perform prediction if do_predict
             if self.do_predict:
-
                 # Run StarDist
                 img = self.data[v]["norm_img"].astype(np.float32) / 255.0
-
                 n_tiles = workflow.choose_stardist_n_tiles(img)
-
                 with open(os.devnull, "w") as f, redirect_stdout(f), redirect_stderr(f):
-
                     msk = self.models[k].predict_instances(
                         img=img, prob_thresh=None, nms_thresh=None, n_tiles=n_tiles
                     )[0]
-
                 msk = msk.astype(np.uint16)
-
                 # Compute submask area
                 submsks_area = workflow.count_submsks_pixels(msk=msk)
-
                 # Convert area in pixel^2 to µm^2
                 submsks_area_um2 = {
                     k1: v1 * px_area_um2 for k1, v1 in submsks_area.items()
                 }
-
             else:
-
                 msk = self.data[v]["msk"]
                 submsks_area = self.data[v]["submsks_area"]
                 submsks_area_um2 = self.data[v]["submsks_area_um2"]
@@ -633,9 +590,7 @@ class PredictFilterWorker(BaseWorker):
                 pix_dict=submsks_area_um2,
                 min_n_pix=self.config["channels"][k]["min_area_um2"],
             )
-
             filt_msk = filt_msk.astype(np.uint16)
-
             output[v] = {
                 "msk": msk,
                 "submsks_area": submsks_area,
@@ -643,14 +598,11 @@ class PredictFilterWorker(BaseWorker):
                 "filt_msk": filt_msk,
             }
 
+            # Record if filtered mask has changed
             if self.do_predict:
-
                 filt_msk_changed[v] = True
-
             else:
-
                 prev_filt_msk = self.data[v]["filt_msk"]
-
                 filt_msk_changed[v] = (
                     False if np.array_equal(filt_msk, prev_filt_msk) else True
                 )
@@ -675,7 +627,6 @@ class ApplyEditsWorker(BaseWorker):
     ):
 
         super().__init__(parent)
-
         self.copied_masks = copied_masks
         self.copied_shapes = copied_shapes
         self.data = data
@@ -686,42 +637,28 @@ class ApplyEditsWorker(BaseWorker):
     def compute(self):
 
         px_area_um2 = self.metadata["image"]["px_area_um2"]
-
         output = {}
 
         for v in self.ch_names.values():
-
             ch_msk = self.copied_masks[v]
             ch_shapes = self.copied_shapes[v]
-
             ch_submsks_area = dict(self.data[v]["submsks_area"])
             ch_submsks_area_um2 = dict(self.data[v]["submsks_area_um2"])
-
             # If user drew cell shapes, add them to the edited cell predictions and compute their area
             if len(ch_shapes) > 0:
-
                 start_idx = int(np.max(ch_msk) + 1)
-
                 ch_msk = workflow.append_shapes_to_msk(
                     msk=ch_msk, shapes=ch_shapes, start_idx=start_idx
                 )
-
                 ch_msk = ch_msk.astype(np.uint16)
-
                 new_ch_submsks_area = workflow.count_submsks_pixels(
                     msk=np.where(ch_msk >= start_idx, ch_msk, 0)
                 )
-
                 for i, j in new_ch_submsks_area.items():
-
                     if i not in ch_submsks_area.keys():
-
                         ch_submsks_area[i] = j
-
                         ch_submsks_area_um2[i] = j * px_area_um2
-
             ch_cnt = workflow.msk_to_cnts(msk=ch_msk)
-
             output[v] = {
                 "edit_msk": ch_msk,
                 "edit_cnts": ch_cnt,
@@ -732,18 +669,14 @@ class ApplyEditsWorker(BaseWorker):
         # Produce base merge image
         ch0 = self.data[self.ch_names[0]]["norm_img"].astype(np.float32)
         ch1 = self.data[self.ch_names[1]]["norm_img"].astype(np.float32)
-
         c0 = to_rgba(self.config["channels"][0]["color"])
         c1 = to_rgba(self.config["channels"][1]["color"])
-
         scale = 0.8
         merge_r = scale * (ch0 * c0[0] + ch1 * c1[0])
         merge_g = scale * (ch0 * c0[1] + ch1 * c1[1])
         merge_b = scale * (ch0 * c0[2] + ch1 * c1[2])
-
         merge_norm_img = np.stack([merge_r, merge_g, merge_b], axis=-1)
         merge_norm_img = np.clip(merge_norm_img, 0, 255).astype(np.uint8)
-
         merge_norm_img_rois = merge_norm_img.copy()
 
         # Add ch0 / ch1 ROIs to merge image
@@ -751,7 +684,6 @@ class ApplyEditsWorker(BaseWorker):
             [self.ch_names[0], self.ch_names[1]],
             [tuple(int(x * 255) for x in c0[:3]), tuple(int(x * 255) for x in c1[:3])],
         ):
-
             merge_norm_img_rois = cv2.drawContours(
                 image=merge_norm_img_rois,
                 contours=[x for x in output[i]["edit_cnts"].values()],
@@ -784,10 +716,9 @@ class OverlapWorker(BaseWorker):
 
         ch0_nm = self.ch_names[0]
         ch1_nm = self.ch_names[1]
-
         output = {}
 
-        # Compute cell status
+        # Compute ROI status
         status_ch0, status_ch1 = workflow.get_submsks1_submsks2_status(
             msk1=self.data[ch0_nm]["edit_msk"],
             msk2=self.data[ch1_nm]["edit_msk"],
@@ -799,35 +730,29 @@ class OverlapWorker(BaseWorker):
 
         # For each channel...
         for i, j, k in [(ch0_nm, ch1_nm, status_ch0), (ch1_nm, ch0_nm, status_ch1)]:
-
             # Produce cell status summary
             summary = {x: len(y) for x, y in k.items()}
             summary["total"] = sum(summary.values())
-
             # Extract contours per status from the precomputed contour dict
             cnts = workflow.status_dict_to_cnts(
                 status_dict=k,
                 cnt_dict=self.data[i]["edit_cnts"],
             )
-
             output[i] = {
                 f"{j}_status": k,
                 "summary": summary,
                 f"cnts": cnts,
             }
 
-        merge_norm_img = self.data["merge"]["merge_norm_img"].copy()
-
+        # Draw ROIs color-coded by status onto merge image
         def rgb_from_config(key):
-
             return tuple(
                 int(x * 255) for x in to_rgba(self.config["elements"][key]["color"])[:3]
             )
 
+        merge_norm_img = self.data["merge"]["merge_norm_img"].copy()
         ch_nm_by_idx = (ch0_nm, ch1_nm)
-
         for p in POPULATIONS:
-
             merge_norm_img = cv2.drawContours(
                 image=merge_norm_img,
                 contours=[
@@ -840,28 +765,27 @@ class OverlapWorker(BaseWorker):
                 color=rgb_from_config(p.key),
                 thickness=4,
             )
+        output["merge"] = {"merge_norm_img_status": merge_norm_img}
 
         # Collect centroids, rank labels and population colors for the ROI IDs Points layer
-        def _centroid_yx(cnt):
+        def centroid_yx(cnt):
             M = cv2.moments(cnt.reshape(-1, 1, 2).astype(np.int32))
             if M["m00"] == 0:
                 return None
             return int(M["m01"] / M["m00"]), int(M["m10"] / M["m00"])  # (row, col)
 
         ranked_ids, centroids, colors = [], [], []
-
         for p in POPULATIONS:
             ch_nm = ch_nm_by_idx[p.primary_ch]
             rgba = tuple(c / 255.0 for c in rgb_from_config(p.key)) + (1.0,)
             for rank, cnt in enumerate(
                 output[ch_nm]["cnts"][p.status].values(), start=1
             ):
-                pt = _centroid_yx(cnt)
+                pt = centroid_yx(cnt)
                 if pt is not None:
                     ranked_ids.append(str(rank))
                     centroids.append(pt)
                     colors.append(rgba)
-
         output["rois"] = {
             "ranked_ids": ranked_ids,
             "centroids": (
@@ -870,8 +794,6 @@ class OverlapWorker(BaseWorker):
             "colors": (np.array(colors, dtype=float) if colors else np.zeros((0, 4))),
         }
 
-        output["merge"] = {"merge_norm_img_status": merge_norm_img}
-
         return output
 
 
@@ -879,7 +801,9 @@ class OverlapWorker(BaseWorker):
 
 
 def _make_color_overlay_delegate(base_cls):
-    class _ColorOverlayDelegate(base_cls):
+
+    class ColorOverlayDelegate(base_cls):
+
         def __init__(self, layer_colors):
             super().__init__()
             self._layer_colors = layer_colors  # {layer_name: QColor}
@@ -897,7 +821,7 @@ def _make_color_overlay_delegate(base_cls):
                 painter.fillRect(option.rect, self._layer_colors[name])
                 painter.restore()
 
-    return _ColorOverlayDelegate
+    return ColorOverlayDelegate
 
 
 # %% PluginManager() ----
@@ -923,8 +847,6 @@ class PluginManager(QWidget):
 
         self._manual_selections = {}
 
-        # ROI IDs text size is in data coordinates, so it scales with zoom; these track
-        # a reference zoom to rescale the font and keep its on-screen size constant.
         self._roi_id_base_text_size = 10
         self._roi_id_ref_zoom = None
 
@@ -1811,6 +1733,15 @@ class PluginManager(QWidget):
 
         self.viewer.reset_view()
 
+        # Anchor the ROI ID label size to the fit-to-view zoom captured HERE,
+        # immediately after reset_view, rather than later at overlap-finish.
+        # reset_view sets camera.zoom = 0.95 * min(canvas_size / image_size), so the
+        # zoom depends on the canvas size at this instant. Capturing it now — when it
+        # provably matches the canvas the image was just fit to — avoids a race where a
+        # canvas resize between load and "Find overlaps" (e.g. entering full-screen)
+        # inflates camera.zoom and makes the labels render far too small.
+        self._roi_id_ref_zoom = self.viewer.camera.zoom
+
     def _update_viewer_data_on_predict_filter_finished(self, filt_msk_changed: dict):
 
         for k, v in self.workflow.ch_names.items():
@@ -1847,8 +1778,10 @@ class PluginManager(QWidget):
         pts = centroids if len(centroids) > 0 else np.zeros((0, 2))
         layer = self.layers["rois"]
 
-        # Capture the current zoom as the reference at which base text size applies.
-        self._roi_id_ref_zoom = self.viewer.camera.zoom
+        # _roi_id_ref_zoom was captured at image-load (see
+        # _update_viewer_data_on_load_finished); do NOT recapture it here from the
+        # current camera, which may have been zoomed by the user or rescaled by a
+        # canvas resize since load.
 
         if len(ranked_ids) > 0:
             hex_colors = [
@@ -1867,6 +1800,10 @@ class PluginManager(QWidget):
             layer.data = pts
             layer.text = text_dict
             layer.visible = True
+            # The dict above sets size to the raw base value, which would render at
+            # base / current_zoom. Rescale it to the load-time reference zoom so the
+            # initial draw uses the same fixed apparent size as every later zoom step.
+            self._update_roi_id_text_size()
         else:
             layer.data = pts
             layer.visible = True
@@ -2368,9 +2305,25 @@ class PluginManager(QWidget):
         px_area_um2 = self.workflow.metadata["image"]["px_area_um2"]
         title = self._get_elem_box(pop_key).base_label
 
+        # Pick which overlap metric to show per cell. The summary keys are
+        # perspective-relative to the population's primary channel:
+        # "max_pct_ovl_1by2" is always the fraction of the primary cell (ch_nm)
+        # overlapped by the secondary cell (ch_other_nm).
+        if status == "pos":
+            ovl_key = "max_mean_pct_ovl"
+            ovl_label = "mean % overlap"
+        elif status == "amb":
+            ovl_key = "max_pct_ovl_1by2"
+            ovl_label = f"% overlap {ch_nm} / {ch_other_nm}"
+        else:  # "neg": no overlap summary exists for these cells
+            ovl_key = None
+            ovl_label = ""
+
         dialog = ChooseROIsWindow(
             title=title,
             rois=rois,
+            ovl_key=ovl_key,
+            ovl_label=ovl_label,
             initial_selected=initial_selected,
             px_area_um2=px_area_um2,
             parent=self,

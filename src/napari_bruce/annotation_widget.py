@@ -126,10 +126,10 @@ class SavePklWorker(QObject):
             self.sig_error.emit(f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
 
 
-# %% _CloseEventFilter ----
+# %% CloseEventFilter ----
 
 
-class _CloseEventFilter(QObject):
+class CloseEventFilter(QObject):
 
     def __init__(self, owner: "AnnotationManager", parent=None):
 
@@ -206,7 +206,7 @@ class AnnotationManager(QWidget):
         self._saving = False
         self._close_after_save = False
 
-        self._close_filter = _CloseEventFilter(owner=self)
+        self._close_filter = CloseEventFilter(owner=self)
         self.viewer.window._qt_window.installEventFilter(self._close_filter)
 
         self._build_layout()
@@ -484,7 +484,7 @@ class AnnotationManager(QWidget):
 
     # %% Message ----
 
-    def set_message(self, text: str, level: MessageLevel = MessageLevel.NONE):
+    def _set_message(self, text: str, level: MessageLevel = MessageLevel.NONE):
 
         self.msg_text.setText(text)
 
@@ -528,7 +528,7 @@ class AnnotationManager(QWidget):
         self.btn_prev.setEnabled(False)
         self.btn_next.setEnabled(False)
         self.btn_save.setEnabled(False)
-        self.set_message(
+        self._set_message(
             "Saving annotations — please do not close the window…",
             MessageLevel.BUSY,
         )
@@ -558,7 +558,7 @@ class AnnotationManager(QWidget):
 
         self._unsaved_changes = False
         self._restore_buttons_after_save()
-        self.set_message(f"Annotations saved to:\n{out_path}", MessageLevel.SAVE)
+        self._set_message(f"Annotations saved to:\n{out_path}", MessageLevel.SAVE)
 
         # If the save was triggered by a close request, close now that the
         # data is safely on disk.
@@ -571,7 +571,7 @@ class AnnotationManager(QWidget):
 
         self._close_after_save = False
         self._restore_buttons_after_save()
-        self.set_message(
+        self._set_message(
             f"Failed to save annotations:\n\n{error_msg}", MessageLevel.ERROR
         )
 
