@@ -642,23 +642,36 @@ class ApplyEditsWorker(BaseWorker):
         for v in self.ch_names.values():
             ch_msk = self.copied_masks[v]
             ch_shapes = self.copied_shapes[v]
-            ch_submsks_area = dict(self.data[v]["submsks_area"])
-            ch_submsks_area_um2 = dict(self.data[v]["submsks_area_um2"])
-            # If user drew cell shapes, add them to the edited cell predictions and compute their area
+            # If user drew cell shapes, add them to the edited cell predictions
             if len(ch_shapes) > 0:
                 start_idx = int(np.max(ch_msk) + 1)
                 ch_msk = workflow.append_shapes_to_msk(
                     msk=ch_msk, shapes=ch_shapes, start_idx=start_idx
                 )
                 ch_msk = ch_msk.astype(np.uint16)
-                new_ch_submsks_area = workflow.count_submsks_pixels(
-                    msk=np.where(ch_msk >= start_idx, ch_msk, 0)
-                )
-                for i, j in new_ch_submsks_area.items():
-                    if i not in ch_submsks_area.keys():
-                        ch_submsks_area[i] = j
-                        ch_submsks_area_um2[i] = j * px_area_um2
+            # Drop degenerate cells with no valid contour (e.g. 1-px remnants left
+            # by erasing or overwriting a cell). msk_to_cnts already excludes them,
+            # but the overlap status and counts scan every non-zero id, so leaving
+            # them in edit_msk would inflate collection_summary above the number of
+            # ROIs actually drawn/selectable/exportable. Removing them here keeps
+            # edit_msk, edit_cnts, areas, status and counts agreeing on the ROI set.
             ch_cnt = workflow.msk_to_cnts(msk=ch_msk)
+            degenerate_ids = [
+                i for i in np.unique(ch_msk) if i != 0 and int(i) not in ch_cnt
+            ]
+            if degenerate_ids:
+                ch_msk = np.where(np.isin(ch_msk, degenerate_ids), 0, ch_msk).astype(
+                    np.uint16
+                )
+            # Recompute areas from the final edited mask so they always match
+            # edit_msk. Editing can delete predicted cells (freeing their ids for
+            # reuse by manual ROIs, which append at start_idx = max+1) or erase
+            # parts of cells; trusting the predicted areas would otherwise leave
+            # stale denominators and corrupt the overlap percentages.
+            ch_submsks_area = workflow.count_submsks_pixels(msk=ch_msk)
+            ch_submsks_area_um2 = {
+                i: j * px_area_um2 for i, j in ch_submsks_area.items()
+            }
             output[v] = {
                 "edit_msk": ch_msk,
                 "edit_cnts": ch_cnt,
@@ -729,19 +742,19 @@ class OverlapWorker(BaseWorker):
         )
 
         # For each channel...
-        for i, j, k in [(ch0_nm, ch1_nm, status_ch0), (ch1_nm, ch0_nm, status_ch1)]:
+        for i, k in [(ch0_nm, status_ch0), (ch1_nm, status_ch1)]:
             # Produce cell status summary
-            summary = {x: len(y) for x, y in k.items()}
-            summary["total"] = sum(summary.values())
+            collection_summary = {x: len(y) for x, y in k.items()}
+            collection_summary["total"] = sum(collection_summary.values())
             # Extract contours per status from the precomputed contour dict
             cnts = workflow.status_dict_to_cnts(
                 status_dict=k,
                 cnt_dict=self.data[i]["edit_cnts"],
             )
             output[i] = {
-                f"{j}_status": k,
-                "summary": summary,
-                f"cnts": cnts,
+                "roi_status_data": k,
+                "collection_summary": collection_summary,
+                "cnts": cnts,
             }
 
         # Draw ROIs color-coded by status onto merge image
@@ -786,7 +799,7 @@ class OverlapWorker(BaseWorker):
                     ranked_ids.append(str(rank))
                     centroids.append(pt)
                     colors.append(rgba)
-        output["rois"] = {
+        output["roi_graphics"] = {
             "ranked_ids": ranked_ids,
             "centroids": (
                 np.array(centroids, dtype=float) if centroids else np.zeros((0, 2))
@@ -1768,10 +1781,10 @@ class PluginManager(QWidget):
 
     def _update_viewer_data_on_overlap_finished(self):
 
-        rois = self.workflow.data.get("rois", {})
-        ranked_ids = rois.get("ranked_ids", [])
-        centroids = rois.get("centroids", np.zeros((0, 2)))
-        colors = rois.get("colors", np.zeros((0, 4)))
+        roi_graphics = self.workflow.data.get("roi_graphics", {})
+        ranked_ids = roi_graphics.get("ranked_ids", [])
+        centroids = roi_graphics.get("centroids", np.zeros((0, 2)))
+        colors = roi_graphics.get("colors", np.zeros((0, 4)))
 
         self.layers["merge"].data = self.workflow.data["merge"]["merge_norm_img_status"]
 
@@ -2148,13 +2161,9 @@ class PluginManager(QWidget):
 
         for k, v in worker_output.items():
 
-            if k == "merge":
+            if k == "roi_graphics":
 
-                self.workflow.data["merge"].update(v)
-
-            elif k == "rois":
-
-                self.workflow.data["rois"] = v
+                self.workflow.data["roi_graphics"] = v
 
             else:
 
@@ -2181,6 +2190,42 @@ class PluginManager(QWidget):
 
         self._refresh_selection_summary()
 
+    def _build_export_data(self) -> dict:
+        """Shallow subset + reorder of self.workflow.data for pickling.
+
+        Values are shared by reference; self.workflow.data is left untouched so a
+        re-save after a parameter change still works. Insertion order == export
+        order; a missing key raises KeyError so pipeline changes surface loudly.
+        """
+        data = self.workflow.data
+
+        def pick(d: dict, keys: tuple[str, ...]) -> dict:
+            return {k: d[k] for k in keys}
+
+        ch_keys = (
+            "img",
+            "norm_img",
+            "msk",
+            "filt_msk",
+            "edit_msk",
+            "submsks_area",
+            "submsks_area_um2",
+            "cnts",
+            "roi_status_data",
+            "collection_summary",
+        )
+
+        ch0_nm = self.workflow.ch_names[0]
+        ch1_nm = self.workflow.ch_names[1]
+        out = {
+            ch0_nm: pick(data[ch0_nm], ch_keys),
+            ch1_nm: pick(data[ch1_nm], ch_keys),
+            "merge": data["merge"],
+            "roi_id_map": data["roi_id_map"],
+            "roi_graphics": data["roi_graphics"],
+        }
+        return out
+
     def _on_save_clicked(self):
 
         # Read content of 'element' boxes
@@ -2198,7 +2243,7 @@ class PluginManager(QWidget):
             data_dict=self.workflow.data,
             metadata_dict=self.workflow.metadata,
             config_dict=self.config,
-            summary_key="summary",
+            summary_key="collection_summary",
             cnts_key="cnts",
             submsks_area_um2_key="submsks_area_um2",
             pop_order=tuple(self.config["elements"].keys()),
@@ -2220,7 +2265,7 @@ class PluginManager(QWidget):
 
         # Write data and metadata to file
         workflow.pickle_data(
-            data=self.workflow.data, filename=Path(out_dir_path, "data.pkl")
+            data=self._build_export_data(), filename=Path(out_dir_path, "data.pkl")
         )
 
         workflow.pickle_data(
@@ -2240,13 +2285,13 @@ class PluginManager(QWidget):
         print(f"Collect / omit summary - {self.workflow.metadata['img_nm']}:\n")
 
         for p in self._populations_in_config_order():
-            ch_summary = self.workflow.data[self.workflow.ch_names[p.primary_ch]][
-                "summary"
-            ]
+            collection_summary = self.workflow.data[
+                self.workflow.ch_names[p.primary_ch]
+            ]["collection_summary"]
             print(
                 f"- {self._elem_label(p)}: "
-                f"{ch_summary[f'{p.status}_collect']} / {ch_summary[p.status]} "
-                f"({ch_summary[f'{p.status}_tube_id']})"
+                f"{collection_summary[f'{p.status}_collect']} / {collection_summary[p.status]} "
+                f"({collection_summary[f'{p.status}_tube_id']})"
             )
 
         print("\n")
@@ -2291,7 +2336,7 @@ class PluginManager(QWidget):
         ch_other_nm = self.workflow.ch_names[1 - p.primary_ch]
 
         cnts = self.workflow.data[ch_nm]["cnts"][status]
-        status_dict = self.workflow.data[ch_nm][f"{ch_other_nm}_status"][status]
+        status_dict = self.workflow.data[ch_nm]["roi_status_data"][status]
 
         rois = [(roi_id, status_dict.get(roi_id, {})) for roi_id in cnts.keys()]
 
@@ -2356,10 +2401,9 @@ class PluginManager(QWidget):
         p = POPULATION_BY_KEY[pop_key]
         status = p.status
         ch_nm = self.workflow.ch_names[p.primary_ch]
-        ch_other_nm = self.workflow.ch_names[1 - p.primary_ch]
 
         cnts = self.workflow.data[ch_nm]["cnts"][status]
-        status_dict = self.workflow.data[ch_nm][f"{ch_other_nm}_status"][status]
+        status_dict = self.workflow.data[ch_nm]["roi_status_data"][status]
 
         if pop_key in self._manual_selections:
             selected = self._manual_selections[pop_key]
@@ -2412,12 +2456,12 @@ class PluginManager(QWidget):
             if box is None:
                 continue
 
-            ch_summary = self.workflow.data[self.workflow.ch_names[p.primary_ch]][
-                "summary"
-            ]
+            collection_summary = self.workflow.data[
+                self.workflow.ch_names[p.primary_ch]
+            ]["collection_summary"]
             elem_cfg = self.config["elements"][p.key]
 
-            max_n_collect = ch_summary[p.status]
+            max_n_collect = collection_summary[p.status]
             n_collect = max_n_collect if elem_cfg["collect"] is True else 0
 
             box.label.setText(f"{box.base_label} ({max_n_collect} total)")
@@ -2443,16 +2487,18 @@ class PluginManager(QWidget):
             box = self.ui.box_elems.get(p.key)
             assert box is not None
 
-            ch_summary = self.workflow.data[self.workflow.ch_names[p.primary_ch]][
-                "summary"
-            ]
+            collection_summary = self.workflow.data[
+                self.workflow.ch_names[p.primary_ch]
+            ]["collection_summary"]
 
-            ch_summary[f"{p.status}_collect"] = box.spin_n.value()
-            ch_summary[f"{p.status}_laser_function"] = box.combo_laser.currentText()
-            ch_summary[f"{p.status}_tube_id"] = box.combo_tube.currentText()
+            collection_summary[f"{p.status}_collect"] = box.spin_n.value()
+            collection_summary[f"{p.status}_laser_function"] = (
+                box.combo_laser.currentText()
+            )
+            collection_summary[f"{p.status}_tube_id"] = box.combo_tube.currentText()
 
-        self.workflow.data[self.workflow.ch_names[0]]["summary"] = {
-            k: self.workflow.data[self.workflow.ch_names[0]]["summary"][k]
+        self.workflow.data[self.workflow.ch_names[0]]["collection_summary"] = {
+            k: self.workflow.data[self.workflow.ch_names[0]]["collection_summary"][k]
             for k in [
                 "total",
                 "neg",
@@ -2470,8 +2516,8 @@ class PluginManager(QWidget):
             ]
         }
 
-        self.workflow.data[self.workflow.ch_names[1]]["summary"] = {
-            k: self.workflow.data[self.workflow.ch_names[1]]["summary"][k]
+        self.workflow.data[self.workflow.ch_names[1]]["collection_summary"] = {
+            k: self.workflow.data[self.workflow.ch_names[1]]["collection_summary"][k]
             for k in [
                 "total",
                 "neg",
