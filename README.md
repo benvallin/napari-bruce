@@ -79,7 +79,10 @@ Available commands:
 # Show config file path
 bruce --show-config-path
 
-# Open config in default editor
+# Open config file in default text editor
+bruce --open-config-file
+
+# Edit config in a dedicated GUI window
 bruce --edit-config
 
 # Reset config to defaults

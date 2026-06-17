@@ -120,10 +120,10 @@ def list_tube_ids() -> list:
     return output
 
 
-# %% _list_channel_colors() ----
+# %% list_channel_colors() ----
 
 
-def _list_channel_colors() -> list:
+def list_channel_colors() -> list:
     """List available channel colors.
 
     Returns:
@@ -139,10 +139,10 @@ def _list_channel_colors() -> list:
     return output
 
 
-# %% _list_population_colors() ----
+# %% list_population_colors() ----
 
 
-def _list_population_colors() -> list:
+def list_population_colors() -> list:
     """List available population colors.
 
     Returns:
@@ -161,7 +161,7 @@ def _list_population_colors() -> list:
     return output
 
 
-# %% _check_config_integrity() ----
+# %% check_config_integrity() ----
 
 
 class ConfigError(RuntimeError):
@@ -170,7 +170,7 @@ class ConfigError(RuntimeError):
     pass
 
 
-def _check_config_integrity(config: dict) -> None:
+def check_config_integrity(config: dict) -> None:
     """Check the integrity of the config dict.
 
     Args:
@@ -265,7 +265,7 @@ def _check_config_integrity(config: dict) -> None:
 
     available_models = [k for k in list_stardist_models().keys()]
 
-    available_channel_colors = _list_channel_colors()
+    available_channel_colors = list_channel_colors()
 
     for i in config["channels"].keys():
 
@@ -303,7 +303,7 @@ def _check_config_integrity(config: dict) -> None:
 
     available_tube_ids = list_tube_ids()
 
-    available_population_colors = _list_population_colors()
+    available_population_colors = list_population_colors()
 
     # The 5 cross-channel populations; "tube_id_matching" also lives in
     # config["elements"] but is validated separately below, not as a population.
@@ -594,7 +594,7 @@ def get_config() -> dict:
                     else {"enabled": False, "sets": []}
                 )
 
-        _check_config_integrity(config=output)
+        check_config_integrity(config=output)
 
         for i in ["channels", "channels_annotation"]:
             output[i] = {int(k): v for k, v in output[i].items()}

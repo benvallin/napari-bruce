@@ -176,9 +176,15 @@ def cli_main(argv: list[str] | None = None) -> None:
         )
 
         parser.add_argument(
+            "--open-config-file",
+            action="store_true",
+            help="open the configuration file in the default text editor",
+        )
+
+        parser.add_argument(
             "--edit-config",
             action="store_true",
-            help="open the configuration file in the default editor",
+            help="edit the configuration in a GUI window",
         )
 
         parser.add_argument(
@@ -249,13 +255,25 @@ def cli_main(argv: list[str] | None = None) -> None:
 
             return
 
-        if args.edit_config:
+        if args.open_config_file:
 
             config_path = configuration.get_config_file_path()
             if not os.path.exists(config_path):
                 configuration.make_default_config()
             print(f"Opening config file at:\n{config_path}")
             configuration.open_in_editor(config_path)
+
+            return
+
+        if args.edit_config:
+
+            config_path = configuration.get_config_file_path()
+            if not os.path.exists(config_path):
+                configuration.make_default_config()
+
+            from .config_editor import launch_config_editor
+
+            launch_config_editor()
 
             return
 
