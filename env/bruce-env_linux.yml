@@ -9,4 +9,4 @@ dependencies:
   - openjdk
   - pip
   - pip:
-      - tensorflow[and-cuda]
+      - "tensorflow[and-cuda]"
