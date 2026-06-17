@@ -860,6 +860,8 @@ class PluginManager(QWidget):
 
         self._manual_selections = {}
 
+        self._tube_match_warning = None
+
         self._roi_id_base_text_size = 10
         self._roi_id_ref_zoom = None
 
@@ -1907,6 +1909,8 @@ class PluginManager(QWidget):
 
         self._manual_selections.clear()
 
+        self._tube_match_warning = None
+
         self._set_workflow_state(state=WorkflowState.CLEARED)
 
         self.workflow.reset()
@@ -2421,7 +2425,10 @@ class PluginManager(QWidget):
 
     def _selection_summary_message(self):
         """Build a message summarising selected ROI count and area per population."""
-        lines = ["Selection summary:\n"]
+        lines = []
+        if self._tube_match_warning is not None:
+            lines.append(f"⚠ {self._tube_match_warning}\n")
+        lines.append("Selection summary:\n")
         for p in self._populations_in_config_order():
             n, area = self._pop_selection_summary(p.key)
             base_label = self._get_elem_box(p.key).base_label
@@ -2447,7 +2454,55 @@ class PluginManager(QWidget):
 
         self._refresh_selection_summary()
 
+    def _resolve_tube_ids(self) -> "tuple[dict[str, str], str | None]":
+        """Resolve the tube ID to pre-select for each population.
+
+        Returns a {population key: tube_id} map plus an optional warning message.
+        When tube-ID filename matching is disabled, every population maps to its
+        config['elements'] default. When enabled, the first set whose 'match'
+        string is found (case-insensitive substring) in the loaded file name
+        overrides those defaults; if no set matches, the defaults are used and a
+        warning is returned. A warning is also returned (first set wins) when the
+        file name matches more than one set.
+        """
+
+        elements = self.config["elements"]
+        defaults = {p.key: elements[p.key]["tube_id"] for p in POPULATIONS}
+
+        matching = elements["tube_id_matching"]
+
+        if not matching["enabled"]:
+            return defaults, None
+
+        stem = Path(self.workflow.path).stem
+        stem_cf = stem.casefold()
+
+        matched = [s for s in matching["sets"] if s["match"].casefold() in stem_cf]
+
+        if not matched:
+            return defaults, (
+                f"No tube-ID set matched file name '{stem}'; using default tubes."
+            )
+
+        chosen = matched[0]
+
+        warning = None
+        if len(matched) > 1:
+            names = ", ".join(f"'{s['match']}'" for s in matched)
+            warning = (
+                f"File name '{stem}' matched multiple tube-ID sets ({names}); "
+                f"using the first ('{chosen['match']}')."
+            )
+
+        resolved = {
+            p.key: chosen["tube_ids"].get(p.key, defaults[p.key]) for p in POPULATIONS
+        }
+
+        return resolved, warning
+
     def _update_elem_boxes(self):
+
+        tube_ids, self._tube_match_warning = self._resolve_tube_ids()
 
         for p in POPULATIONS:
 
@@ -2477,7 +2532,7 @@ class PluginManager(QWidget):
             box.combo_laser.blockSignals(False)
 
             box.combo_tube.blockSignals(True)
-            box.combo_tube.setCurrentText(elem_cfg["tube_id"])
+            box.combo_tube.setCurrentText(tube_ids[p.key])
             box.combo_tube.blockSignals(False)
 
     def _read_elem_boxes(self):

@@ -305,7 +305,11 @@ def _check_config_integrity(config: dict) -> None:
 
     available_population_colors = _list_population_colors()
 
-    for i in config["elements"].keys():
+    # The 5 cross-channel populations; "tube_id_matching" also lives in
+    # config["elements"] but is validated separately below, not as a population.
+    population_keys = list(exp_elem_kv.keys())
+
+    for i in population_keys:
 
         check_dict_kv(
             exp_kv=exp_subelem_kv,
@@ -330,6 +334,62 @@ def _check_config_integrity(config: dict) -> None:
             raise ConfigError(
                 f"config['elements']['{i}']['color'] must be one of {', '.join(available_population_colors)}."
             )
+
+    if "tube_id_matching" not in config["elements"]:
+
+        raise ConfigError("Missing config elements key(s): tube_id_matching.")
+
+    tube_id_matching = config["elements"]["tube_id_matching"]
+
+    check_dict_kv(
+        exp_kv={"enabled": bool, "sets": list},
+        in_dict=tube_id_matching,
+        dict_nm="config elements tube_id_matching",
+    )
+
+    seen_matches = []
+
+    for idx, tube_id_set in enumerate(tube_id_matching["sets"]):
+
+        if not isinstance(tube_id_set, dict):
+
+            raise ConfigError(
+                f"config['elements']['tube_id_matching']['sets'][{idx}] must be a dict."
+            )
+
+        check_dict_kv(
+            exp_kv={"match": str, "tube_ids": dict},
+            in_dict=tube_id_set,
+            dict_nm=f"config elements tube_id_matching set {idx}",
+        )
+
+        match = tube_id_set["match"]
+
+        if match.casefold() in seen_matches:
+
+            raise ConfigError(
+                f"config['elements']['tube_id_matching']['sets'] has duplicate match string: '{match}'."
+            )
+
+        seen_matches.append(match.casefold())
+
+        set_keys = list(tube_id_set["tube_ids"].keys())
+
+        if set(set_keys) != set(population_keys):
+
+            raise ConfigError(
+                f"config['elements']['tube_id_matching']['sets'][{idx}]['tube_ids'] keys must match "
+                f"the population keys: {', '.join(population_keys)}."
+            )
+
+        for key, tube_id in tube_id_set["tube_ids"].items():
+
+            if not isinstance(tube_id, str) or tube_id not in available_tube_ids:
+
+                raise ConfigError(
+                    f"config['elements']['tube_id_matching']['sets'][{idx}]['tube_ids']['{key}'] "
+                    f"must be one of {', '.join(available_tube_ids)}."
+                )
 
     check_dict_kv(
         exp_kv=exp_ch_annot_kv,
@@ -439,6 +499,34 @@ def make_default_config() -> dict:
                 "laser_function": "RoboLPC",
                 "tube_id": "manual",
             },
+            # When 'enabled' is True, the set whose 'match' string is found
+            # (case-insensitive substring) in the loaded image file name
+            # overrides the per-population 'tube_id' defaults above.
+            "tube_id_matching": {
+                "enabled": True,
+                "sets": [
+                    {
+                        "match": "-l-",
+                        "tube_ids": {
+                            "ch0-pos/ch1-neg": "Tube 1",
+                            "ch0-pos/ch1-pos": "Tube 2",
+                            "ch1-pos/ch0-neg": "Tube 3",
+                            "ch0-pos/ch1-amb": "manual",
+                            "ch1-pos/ch0-amb": "manual",
+                        },
+                    },
+                    {
+                        "match": "-r-",
+                        "tube_ids": {
+                            "ch0-pos/ch1-neg": "Tube 4",
+                            "ch0-pos/ch1-pos": "Tube 5",
+                            "ch1-pos/ch0-neg": "Tube 6",
+                            "ch0-pos/ch1-amb": "manual",
+                            "ch1-pos/ch0-amb": "manual",
+                        },
+                    },
+                ],
+            },
         },
         "channels_annotation": {
             0: {
@@ -489,6 +577,22 @@ def get_config() -> dict:
         except OSError:
 
             raise OSError(f"Could not read config file.")
+
+        # Backward-compat: 'tube_id_matching' lives inside config["elements"].
+        # Older configs lack it entirely; normalize by moving a stray top-level
+        # block (if present) into elements, otherwise injecting a disabled
+        # default. Either way no top-level orphan is left behind.
+        if isinstance(output.get("elements"), dict):
+
+            legacy = output.pop("tube_id_matching", None)
+
+            if "tube_id_matching" not in output["elements"]:
+
+                output["elements"]["tube_id_matching"] = (
+                    legacy
+                    if isinstance(legacy, dict)
+                    else {"enabled": False, "sets": []}
+                )
 
         _check_config_integrity(config=output)
 
