@@ -40,6 +40,7 @@ Bruce requires a **platform-specific Conda environment** due to differences in n
 |-------------------------|--------------------------------------|
 | Windows (native)        | `env/bruce-env_windows_native.yml`   |
 | macOS (Apple Silicon)   | `env/bruce-env_macos_arm.yml`        |
+| Linux                   | `env/bruce-env_linux.yml`            |
 ```
 
 Open a terminal and run:
