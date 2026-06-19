@@ -2,6 +2,8 @@
 
 import json
 
+from qtpy.QtGui import QFont
+
 from qtpy.QtWidgets import (
     QApplication,
     QDialog,
@@ -27,6 +29,12 @@ from . import configuration
 
 
 # %% Small widget helpers ----
+
+
+def _pretty_population(key: str) -> str:
+    """Display form of a population key: '-pos'/'-neg' -> superscript +/-."""
+
+    return key.replace("-pos", "⁺").replace("-neg", "⁻")
 
 
 def _percent_spin(value: float) -> QDoubleSpinBox:
@@ -78,7 +86,7 @@ class TubeIdSetWidget(QGroupBox):
         for key in population_keys:
             combo = _combo(tube_options, tube_ids.get(key, tube_options[0]))
             self._tube_combos[key] = combo
-            form.addRow(key, combo)
+            form.addRow(_pretty_population(key), combo)
         layout.addLayout(form)
 
     def value(self) -> dict:
@@ -120,8 +128,9 @@ class ConfigEditor(QDialog):
         layout = QVBoxLayout(self)
 
         tabs = QTabWidget()
-        tabs.addTab(self._build_paths_channels_tab(), "Paths & channels")
-        tabs.addTab(self._build_elements_tab(), "Elements & tubes")
+        tabs.addTab(self._build_paths_tab(), "Paths")
+        tabs.addTab(self._build_channels_tab(), "Channels")
+        tabs.addTab(self._build_elements_tab(), "Elements")
         tabs.addTab(self._build_annotation_tab(), "Annotation")
         layout.addWidget(tabs)
 
@@ -129,6 +138,9 @@ class ConfigEditor(QDialog):
         buttons.accepted.connect(self._on_save)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+        # Enlarge group-box titles consistently across all tabs.
+        self._style_group_titles()
 
     # -- Tab builders -----------------------------------------------------
 
@@ -141,7 +153,22 @@ class ConfigEditor(QDialog):
 
         return scroll
 
-    def _build_paths_channels_tab(self) -> QWidget:
+    def _style_group_titles(self) -> None:
+        """Enlarge/bold every group-box title while leaving contents at the
+        default font, so titles look the same across all tabs."""
+
+        title_font = QFont()
+        title_font.setPointSize(13)
+        title_font.setBold(True)
+
+        base_font = QApplication.font()
+
+        for box in self.findChildren(QGroupBox):
+            box.setFont(title_font)
+            for child in box.findChildren(QWidget):
+                child.setFont(base_font)
+
+    def _build_paths_tab(self) -> QWidget:
 
         page = QWidget()
         page_layout = QVBoxLayout(page)
@@ -154,6 +181,15 @@ class ConfigEditor(QDialog):
         paths_form.addRow("input directory", self._with_browse(self.edit_in_dir))
         paths_form.addRow("output directory", self._with_browse(self.edit_out_dir))
         page_layout.addWidget(paths_box)
+
+        page_layout.addStretch()
+
+        return self._scrollable(page)
+
+    def _build_channels_tab(self) -> QWidget:
+
+        page = QWidget()
+        page_layout = QVBoxLayout(page)
 
         # Per-channel detection settings
         self._channel_widgets = {}
@@ -200,7 +236,7 @@ class ConfigEditor(QDialog):
         self._element_widgets = {}
         for key in self._population_keys:
             elem = self.config["elements"][key]
-            box = QGroupBox(key)
+            box = QGroupBox(_pretty_population(key))
             form = QFormLayout(box)
             w = {
                 "color": _combo(self._population_colors, elem["color"]),
@@ -223,9 +259,7 @@ class ConfigEditor(QDialog):
         match_box = QGroupBox("Tube ID filename matching")
         match_layout = QVBoxLayout(match_box)
 
-        self.check_matching_enabled = QCheckBox(
-            "Select tube IDs by matching the image file name"
-        )
+        self.check_matching_enabled = QCheckBox("Enable")
         self.check_matching_enabled.setChecked(bool(matching["enabled"]))
         match_layout.addWidget(self.check_matching_enabled)
 

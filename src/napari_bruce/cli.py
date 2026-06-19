@@ -194,6 +194,12 @@ def cli_main(argv: list[str] | None = None) -> None:
         )
 
         parser.add_argument(
+            "--merge-elem-lists",
+            action="store_true",
+            help="combine the element lists of several bruce runs in a GUI window",
+        )
+
+        parser.add_argument(
             "--gpu-status",
             action="store_true",
             help="check if GPU(s) are visible to TensorFlow",
@@ -282,6 +288,18 @@ def cli_main(argv: list[str] | None = None) -> None:
             config_path = configuration.get_config_file_path()
             configuration.make_default_config()
             print(f"Configuration reset to defaults at:\n{config_path}")
+
+            return
+
+        if args.merge_elem_lists:
+
+            config_path = configuration.get_config_file_path()
+            if not os.path.exists(config_path):
+                configuration.make_default_config()
+
+            from .merge_widget import launch_merge_elem_lists
+
+            launch_merge_elem_lists()
 
             return
 

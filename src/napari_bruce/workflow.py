@@ -1285,6 +1285,171 @@ Elements :\n
     return output
 
 
+# %% merge_elem_lists() ----
+
+
+def _read_elem_txt(file: str | Path, img_nm: str, comment_sep: str) -> list[dict]:
+    """Parse one PALMRobo element-list .txt into lean per-element dicts.
+
+    Contours are read as-is (already in absolute PALM stage coordinates) and each
+    element's Comment is prefixed with the source image name so its origin stays
+    traceable once lists from several FOVs are combined.
+
+    Args:
+      file (str | Path): path to a PALMRobo element-list .txt file.
+      img_nm (str): source image name, prefixed to every Comment.
+      comment_sep (str): separator inserted between img_nm and the original Comment.
+
+    Returns:
+      list[dict]: one dict per element with keys 'cnt', 'color', 'laser_function',
+        'tube_id', 'area', 'comment', 'objective'.
+    """
+
+    dfs = _txt_to_elem_dfs(file=str(file))
+
+    elems = []
+    for df in dfs:
+
+        meta = _get_elem_metadata(elem_df=df)
+        cnt = _get_elem_cnt(elem_df=df)
+
+        elems.append(
+            {
+                "cnt": cnt,
+                "color": meta["Color"],
+                "laser_function": meta["Laser function"],
+                "tube_id": meta["Well"],
+                "area": meta["Area"],
+                "comment": f"{img_nm}{comment_sep}{meta['Comment']}",
+                "objective": meta["Objective"],
+            }
+        )
+
+    return elems
+
+
+def _emit_elem_txt(elems: list[dict]) -> str:
+    """Format lean per-element dicts into a PALMRobo element-list .txt string.
+
+    Mirrors make_elem_list's output exactly, but takes contours that are already
+    in PALM coordinates (no rescaling) and an explicit per-element 'no'.
+
+    Args:
+      elems (list[dict]): per-element dicts as produced by _read_elem_txt(), each
+        additionally carrying an integer 'no' (the element-list "No" column).
+
+    Returns:
+      str: PALMRobo-compatible element-list text.
+    """
+
+    import pandas as pd
+
+    date_time = datetime.now().strftime("%d.%m.%Y\t%H:%M:%S")
+
+    header = f"""PALMRobo Elements
+Version:	V 4.9.0.0
+Date, Time :	{date_time}
+
+MICROMETER
+Elements :\n
+"""
+
+    res = [
+        _format_elem_cnt(
+            elem_cnt=e["cnt"],
+            id=e["no"],
+            color=e["color"],
+            laser_fun=e["laser_function"],
+            destination=e["tube_id"],
+            area=e["area"],
+            comment=e["comment"],
+            objective=e["objective"],
+        )
+        for e in elems
+    ]
+
+    res = pd.concat(res)
+
+    res = res.to_csv(index=False, sep="\t")
+
+    return header + res + "\n\n\n"
+
+
+def merge_elem_lists(
+    folder_paths: list[str | Path], comment_sep: str = " | "
+) -> dict:
+    """Combine the PALMRobo element lists produced by several bruce runs.
+
+    Each bruce run analyses one field of view and writes its element list(s) into
+    a folder named after the image. This gathers the per-folder lists, prefixes
+    every element's Comment with its source image name, globally renumbers the
+    element-list "No" column (collected elements first, then omitted), and returns
+    one merged list ready to import into PALMRobo.
+
+    Contours are read straight from the .txt files, where they already live in
+    absolute PALM stage coordinates, so elements from different FOVs share one
+    coordinate space and combine without rescaling.
+
+    Args:
+      folder_paths (list[str | Path]): bruce output folders, each containing an
+        elem_list_collect.txt (and optionally an elem_list_omit.txt).
+      comment_sep (str): separator inserted between the image name and the
+        original Comment.
+
+    Returns:
+      dict: PALMRobo .txt strings keyed "collect" (and "omit"/"all" when any
+        source folder contained omitted elements), mirroring single-run output.
+
+    Raises:
+      FileNotFoundError: a folder has no elem_list_collect.txt.
+      ValueError: no folders given, or no collected elements across all folders.
+    """
+
+    if not folder_paths:
+        raise ValueError("No folders selected for merging.")
+
+    collected: list[dict] = []
+    omitted: list[dict] = []
+
+    for folder in folder_paths:
+
+        folder = Path(folder)
+        img_nm = folder.name
+
+        collect_file = folder / "elem_list_collect.txt"
+        omit_file = folder / "elem_list_omit.txt"
+
+        if not collect_file.exists():
+            raise FileNotFoundError(
+                f"No elem_list_collect.txt found in:\n{folder}"
+            )
+
+        collected.extend(_read_elem_txt(collect_file, img_nm, comment_sep))
+
+        if omit_file.exists():
+            omitted.extend(_read_elem_txt(omit_file, img_nm, comment_sep))
+
+    if not collected:
+        raise ValueError("No collected elements found in the selected folders.")
+
+    # Global element-list numbering: collected 1..N, omitted continue at N+1.
+    for i, e in enumerate(collected, start=1):
+        e["no"] = i
+    for j, e in enumerate(omitted, start=len(collected) + 1):
+        e["no"] = j
+
+    if not omitted:
+        groups = {"collect": collected}
+    else:
+        groups = {
+            "collect": collected,
+            "omit": omitted,
+            "all": collected + omitted,
+        }
+
+    return {nm: _emit_elem_txt(elems) for nm, elems in groups.items()}
+
+
 # %% choose_stardist_n_tiles() ----
 
 

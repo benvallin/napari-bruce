@@ -2256,6 +2256,19 @@ class PluginManager(QWidget):
             ),
         )
 
+        # Abort cleanly when no ROI is selected for collection: an element list
+        # with no elements cannot be formatted (pandas: "No objects to
+        # concatenate") and would not be useful to import into PALMRobo.
+        if not any(r.collected for r in elem_records):
+
+            self._set_message(
+                "The element list is empty: no ROI selected for collection.\n\n"
+                "No results were written to file.",
+                MessageLevel.WARNING,
+            )
+
+            return
+
         self.elem_list = workflow.make_elem_list(elem_records, self.workflow.metadata)
 
         for k in self.elem_list.keys():
