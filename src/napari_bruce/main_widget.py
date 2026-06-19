@@ -4,7 +4,6 @@
 import sys
 import os
 import copy
-import cv2
 import json
 import importlib.resources
 import traceback
@@ -28,6 +27,7 @@ from qtpy.QtWidgets import (
     QComboBox,
     QDialog,
     QScrollArea,
+    QFrame,
     QCheckBox,
     QDialogButtonBox,
 )
@@ -81,7 +81,6 @@ class WorkflowState(Enum):
     PREDICTING_ROI = auto()
     APPLY_EDITS = auto()
     APPLYING_EDITS = auto()
-    OVERLAP_ROI = auto()
     OVERLAPPING_ROI = auto()
     OVERLAP_FILTER_OR_SAVE = auto()
     UPDATE_OVERLAP_FILTER_OR_SAVE = auto()
@@ -147,9 +146,11 @@ class UIComponents:
     btn_load: QPushButton | None
     btn_predict: QPushButton | None
     btn_filter_size: QPushButton | None
+    btn_discard_additions: QPushButton | None
+    btn_discard_deletions: QPushButton | None
     btn_apply_edits: QPushButton | None
-    btn_overlap: QPushButton | None
     btn_overlap_filter: QPushButton | None
+    btn_edit_rois: QPushButton | None
     btn_save: QPushButton | None
     box_min_area_ch0: "ParamValueBox | None"
     box_min_area_ch1: "ParamValueBox | None"
@@ -167,9 +168,11 @@ class UIComponents:
         self.btn_load = None
         self.btn_predict = None
         self.btn_filter_size = None
+        self.btn_discard_additions = None
+        self.btn_discard_deletions = None
         self.btn_apply_edits = None
-        self.btn_overlap = None
         self.btn_overlap_filter = None
+        self.btn_edit_rois = None
         self.btn_save = None
         self.box_min_area_ch0 = None
         self.box_min_area_ch1 = None
@@ -397,6 +400,39 @@ class ChooseROIsWindow(QDialog):
             for roi_id, roi_box in self._checkboxes.items()
             if roi_box.isChecked()
         }
+
+
+# %% ChannelSelectWindow() ----
+
+
+class ChannelSelectWindow(QDialog):
+    """Pick which channel(s) an edit-discard action applies to (one or both)."""
+
+    def __init__(self, title, channel_names, prompt="", parent=None):
+
+        super().__init__(parent)
+
+        self.setWindowTitle(title)
+        layout = QVBoxLayout(self)
+
+        if prompt:
+            layout.addWidget(QLabel(prompt))
+
+        # One checkbox per channel, both ticked by default (the common case).
+        self._checkboxes = {}
+        for idx in sorted(channel_names):
+            cb = QCheckBox(channel_names[idx])
+            cb.setChecked(True)
+            self._checkboxes[idx] = cb
+            layout.addWidget(cb)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def selected_channels(self):
+        return [idx for idx, cb in self._checkboxes.items() if cb.isChecked()]
 
 
 # %% BaseWorker() ----
@@ -679,37 +715,8 @@ class ApplyEditsWorker(BaseWorker):
                 "submsks_area_um2": ch_submsks_area_um2,
             }
 
-        # Produce base merge image
-        ch0 = self.data[self.ch_names[0]]["norm_img"].astype(np.float32)
-        ch1 = self.data[self.ch_names[1]]["norm_img"].astype(np.float32)
-        c0 = to_rgba(self.config["channels"][0]["color"])
-        c1 = to_rgba(self.config["channels"][1]["color"])
-        scale = 0.8
-        merge_r = scale * (ch0 * c0[0] + ch1 * c1[0])
-        merge_g = scale * (ch0 * c0[1] + ch1 * c1[1])
-        merge_b = scale * (ch0 * c0[2] + ch1 * c1[2])
-        merge_norm_img = np.stack([merge_r, merge_g, merge_b], axis=-1)
-        merge_norm_img = np.clip(merge_norm_img, 0, 255).astype(np.uint8)
-        merge_norm_img_rois = merge_norm_img.copy()
-
-        # Add ch0 / ch1 ROIs to merge image
-        for i, j in zip(
-            [self.ch_names[0], self.ch_names[1]],
-            [tuple(int(x * 255) for x in c0[:3]), tuple(int(x * 255) for x in c1[:3])],
-        ):
-            merge_norm_img_rois = cv2.drawContours(
-                image=merge_norm_img_rois,
-                contours=[x for x in output[i]["edit_cnts"].values()],
-                contourIdx=-1,
-                color=j,
-                thickness=4,
-            )
-
-        output["merge"] = {
-            "merge_norm_img": merge_norm_img,
-            "merge_norm_img_rois": merge_norm_img_rois,
-        }
-
+        # The merge image is built by OverlapWorker (its only consumer); this worker
+        # is concerned only with the edited masks.
         return output
 
 
@@ -757,55 +764,47 @@ class OverlapWorker(BaseWorker):
                 "cnts": cnts,
             }
 
-        # Draw ROIs color-coded by status onto merge image
+        # Resolve each population's color once, then delegate the merge-image
+        # rendering and ROI-ID overlay construction to workflow.py.
         def rgb_from_config(key):
             return tuple(
                 int(x * 255) for x in to_rgba(self.config["elements"][key]["color"])[:3]
             )
 
-        merge_norm_img = self.data["merge"]["merge_norm_img"].copy()
-        ch_nm_by_idx = (ch0_nm, ch1_nm)
-        for p in POPULATIONS:
-            merge_norm_img = cv2.drawContours(
-                image=merge_norm_img,
-                contours=[
-                    x
-                    for x in output[ch_nm_by_idx[p.primary_ch]]["cnts"][
-                        p.status
-                    ].values()
-                ],
-                contourIdx=-1,
-                color=rgb_from_config(p.key),
-                thickness=4,
-            )
-        output["merge"] = {"merge_norm_img_status": merge_norm_img}
-
-        # Collect centroids, rank labels and population colors for the ROI IDs Points layer
-        def centroid_yx(cnt):
-            M = cv2.moments(cnt.reshape(-1, 1, 2).astype(np.int32))
-            if M["m00"] == 0:
-                return None
-            return int(M["m01"] / M["m00"]), int(M["m10"] / M["m00"])  # (row, col)
-
-        ranked_ids, centroids, colors = [], [], []
-        for p in POPULATIONS:
-            ch_nm = ch_nm_by_idx[p.primary_ch]
-            rgba = tuple(c / 255.0 for c in rgb_from_config(p.key)) + (1.0,)
-            for rank, cnt in enumerate(
-                output[ch_nm]["cnts"][p.status].values(), start=1
-            ):
-                pt = centroid_yx(cnt)
-                if pt is not None:
-                    ranked_ids.append(str(rank))
-                    centroids.append(pt)
-                    colors.append(rgba)
-        output["roi_graphics"] = {
-            "ranked_ids": ranked_ids,
-            "centroids": (
-                np.array(centroids, dtype=float) if centroids else np.zeros((0, 2))
-            ),
-            "colors": (np.array(colors, dtype=float) if colors else np.zeros((0, 4))),
+        cnts_by_ch_idx = {0: output[ch0_nm]["cnts"], 1: output[ch1_nm]["cnts"]}
+        pop_colors_rgb = {p.key: rgb_from_config(p.key) for p in POPULATIONS}
+        pop_colors_rgba = {
+            key: tuple(c / 255.0 for c in rgb) + (1.0,)
+            for key, rgb in pop_colors_rgb.items()
         }
+
+        # Base merge depends only on the normalized channel images + channel colors,
+        # which are fixed once the image is loaded. Build it once and reuse it across
+        # overlap re-runs (e.g. Adjust overlap filter) instead of re-blending.
+        merge_norm_img = self.data.get("merge", {}).get("merge_norm_img")
+        if merge_norm_img is None:
+            merge_norm_img = workflow.make_merge_norm_img(
+                img0=self.data[ch0_nm]["norm_img"],
+                img1=self.data[ch1_nm]["norm_img"],
+                rgba0=to_rgba(self.config["channels"][0]["color"]),
+                rgba1=to_rgba(self.config["channels"][1]["color"]),
+            )
+
+        # Draw ROIs color-coded by status onto the base merge
+        output["merge"] = {
+            "merge_norm_img": merge_norm_img,
+            "merge_norm_img_status": workflow.draw_status_contours(
+                merge_norm_img=merge_norm_img,
+                cnts_by_ch_idx=cnts_by_ch_idx,
+                pop_colors_rgb=pop_colors_rgb,
+            ),
+        }
+
+        # Centroids, rank labels and colors for the ROI IDs Points layer
+        output["roi_graphics"] = workflow.build_roi_graphics(
+            cnts_by_ch_idx=cnts_by_ch_idx,
+            pop_colors_rgba=pop_colors_rgba,
+        )
 
         return output
 
@@ -864,6 +863,9 @@ class PluginManager(QWidget):
 
         self._roi_id_base_text_size = 10
         self._roi_id_ref_zoom = None
+
+        # Last collection summary printed to the terminal; re-prints only on change.
+        self._last_collection_summary_print = None
 
         self._build_layout()
 
@@ -1055,7 +1057,27 @@ class PluginManager(QWidget):
         self.layout.addLayout(self.header_layout)
         self.layout.addStretch(1)
 
-        self.setLayout(self.layout)
+        # Host all panel content in a scroll area so its height can never force
+        # napari to resize the GL canvas. On macOS native full-screen such a resize
+        # wedges the window's buffer-swap/present (the panel stops painting until
+        # full-screen is exited — see known_issue_macos_fullscreen_stall). Scrolling
+        # internally keeps the dock/canvas size fixed regardless of panel content.
+        # self.layout (the attribute used by every insert/remove call) stays the
+        # inner VBox; only its host changes from the widget itself to 'content'.
+        content = QWidget()
+        content.setLayout(self.layout)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setWidget(content)
+
+        outer = QVBoxLayout()
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(scroll)
+        self.setLayout(outer)
+
         self.setMinimumWidth(300)
         self.setMaximumWidth(1000)
 
@@ -1214,6 +1236,10 @@ class PluginManager(QWidget):
             self.layers["merge"].data = merge_array
             self.layers["merge"].name = "Merge + ROIs"
 
+            # Reset text to a scalar constant before clearing the points so no
+            # stale per-point text array (trimmed to the old point count) lingers
+            # to be indexed out of bounds on the next image's overlap pass.
+            self.layers["rois"].text = {"constant": ""}
             self.layers["rois"].data = np.zeros((0, 2))
             self.layers["rois"].visible = False
 
@@ -1248,6 +1274,11 @@ class PluginManager(QWidget):
             WorkflowState.IMAGE_LOADED_FOR_PREDICT_ROI,
             WorkflowState.PREDICT_ROI,
             WorkflowState.PREDICTING_ROI,
+            # Apply-edits and overlap run as background computations: show the
+            # plain channel images (merge hidden) until the status-colored merge
+            # is ready, so neither a stale nor a placeholder merge is shown.
+            WorkflowState.APPLYING_EDITS,
+            WorkflowState.OVERLAPPING_ROI,
         }:
 
             viewer_state = ViewerState.IMAGE_LOADED
@@ -1257,9 +1288,6 @@ class PluginManager(QWidget):
             viewer_state = ViewerState.ROI_EDITING
 
         elif workflow_state in {
-            WorkflowState.APPLYING_EDITS,
-            WorkflowState.OVERLAP_ROI,
-            WorkflowState.OVERLAPPING_ROI,
             WorkflowState.OVERLAP_FILTER_OR_SAVE,
             WorkflowState.UPDATE_OVERLAP_FILTER_OR_SAVE,
             WorkflowState.CLEARED,
@@ -1386,14 +1414,6 @@ class PluginManager(QWidget):
 
             self._set_applying_edits_ui()
 
-        elif workflow_state == WorkflowState.OVERLAP_ROI:
-
-            self._set_overlap_roi_ui()
-
-        elif workflow_state == WorkflowState.OVERLAPPING_ROI:
-
-            self._set_overlapping_roi_ui()
-
         elif workflow_state == WorkflowState.OVERLAP_FILTER_OR_SAVE:
 
             self._set_overlap_filter_or_save_ui(build_ui=True)
@@ -1428,6 +1448,40 @@ class PluginManager(QWidget):
 
             btn.setEnabled(enabled)
 
+    def _destroy_ui_widgets(self, names):
+        """Remove, hide and delete the named self.ui widgets, resetting each to None.
+
+        Missing/None widgets are skipped, so this is safe to call on partially
+        built panels.
+        """
+
+        for name in names:
+
+            widget = getattr(self.ui, name, None)
+
+            if widget is not None:
+
+                self.layout.removeWidget(widget)
+                widget.hide()
+                widget.deleteLater()
+                setattr(self.ui, name, None)
+
+    def _destroy_elem_boxes(self):
+        """Tear down the per-population element boxes and drop their references.
+
+        The 'Choose ROIs' buttons live inside the element boxes, so they are
+        destroyed together with them; only their references need dropping.
+        """
+
+        for box in self.ui.box_elems.values():
+
+            self.layout.removeWidget(box)
+            box.hide()
+            box.deleteLater()
+
+        self.ui.box_elems.clear()
+        self.ui.btns_choose_rois.clear()
+
     def _set_select_file_ui(self):
 
         btn_select = QPushButton("Select file")
@@ -1438,12 +1492,7 @@ class PluginManager(QWidget):
     def _set_load_image_ui(self):
 
         # Remove 'Select file' button from viewer
-        btn_select = self.ui.btn_select
-        assert btn_select is not None
-        self.layout.removeWidget(btn_select)
-        btn_select.hide()
-        btn_select.deleteLater()
-        self.ui.btn_select = None
+        self._destroy_ui_widgets(["btn_select"])
 
         # Add 'Load images', 'Predict cells' and 'Clear' buttons to viewer
         btn_load = QPushButton("Load images")
@@ -1465,14 +1514,9 @@ class PluginManager(QWidget):
     def _set_loading_image_ui(self):
 
         # Remove 'Load images' button from viewer
-        btn_load = self.ui.btn_load
-        assert btn_load is not None
-        self.layout.removeWidget(btn_load)
-        btn_load.hide()
-        btn_load.deleteLater()
-        self.ui.btn_load = None
+        self._destroy_ui_widgets(["btn_load"])
 
-    def _set_predict_roi_ui(self, loaded_for_predict=False):
+    def _add_min_area_boxes(self):
 
         # Add 'min n pix' boxes to viewer
         box_min_area_ch0 = ParamValueBox(
@@ -1497,10 +1541,14 @@ class PluginManager(QWidget):
 
             self.layout.insertWidget(i, j)
 
+    def _set_predict_roi_ui(self, loaded_for_predict=False):
+
+        self._add_min_area_boxes()
+
         if loaded_for_predict:
 
             # Disable 'min n pix' boxes
-            for i in [box_min_area_ch0, box_min_area_ch1]:
+            for i in [self.ui.box_min_area_ch0, self.ui.box_min_area_ch1]:
 
                 i.setEnabled(False)
 
@@ -1514,38 +1562,48 @@ class PluginManager(QWidget):
 
     def _set_predicting_roi_ui(self):
 
-        for i in ["btn_load", "btn_predict"]:
-
-            j = getattr(self.ui, i, None)
-
-            if j is not None:
-
-                self.layout.removeWidget(j)
-                j.hide()
-                j.deleteLater()
-                setattr(self.ui, i, None)
+        self._destroy_ui_widgets(["btn_load", "btn_predict"])
 
     def _set_apply_edits_ui(self):
 
-        # Add 'Adjust size filter' and 'Apply edits' buttons to viewer if predictions are returned for the first time
+        # Add 'Adjust size filter', 'Discard additions', 'Discard deletions' and
+        # 'Apply edits' buttons to viewer if predictions are returned for the first time
         btn_filter_size = QPushButton("Adjust size filter")
         btn_filter_size.clicked.connect(self._on_filter_size_clicked)
         self.ui.btn_filter_size = btn_filter_size
+
+        btn_discard_additions = QPushButton("Discard added ROIs")
+        btn_discard_additions.clicked.connect(self._on_discard_additions_clicked)
+        self.ui.btn_discard_additions = btn_discard_additions
+
+        btn_discard_deletions = QPushButton("Restore deleted ROIs")
+        btn_discard_deletions.clicked.connect(self._on_discard_deletions_clicked)
+        self.ui.btn_discard_deletions = btn_discard_deletions
 
         btn_apply_edits = QPushButton("Apply edits")
         btn_apply_edits.clicked.connect(self._on_apply_edits_clicked)
         self.ui.btn_apply_edits = btn_apply_edits
 
-        for i, j in zip([2, 3], [btn_filter_size, btn_apply_edits]):
+        for i, j in zip(
+            [2, 3, 4, 5],
+            [
+                btn_filter_size,
+                btn_discard_additions,
+                btn_discard_deletions,
+                btn_apply_edits,
+            ],
+        ):
 
             self.layout.insertWidget(i, j)
 
-        # Re-enable 'min n pix' boxes, 'Adjust size filter', 'Apply edits' and 'Clear' buttons
-        # => 'Adjust size filter' and 'Apply edits' buttons are already enabled if predictions are returned for the first time
+        # Re-enable 'min n pix' boxes, the edit buttons and 'Clear'
+        # => the edit buttons are already enabled if predictions are returned for the first time
         for i in [
             self.ui.box_min_area_ch0,
             self.ui.box_min_area_ch1,
             self.ui.btn_filter_size,
+            self.ui.btn_discard_additions,
+            self.ui.btn_discard_deletions,
             self.ui.btn_apply_edits,
             self.ui.btn_clear,
         ]:
@@ -1555,26 +1613,21 @@ class PluginManager(QWidget):
 
     def _set_applying_edits_ui(self):
 
-        # Remove 'min n pix' boxes, 'Adjust size filter' and 'Apply edits' buttons from viewer
-        for i in [
-            "box_min_area_ch0",
-            "box_min_area_ch1",
-            "btn_filter_size",
-            "btn_apply_edits",
-        ]:
+        # Remove 'min n pix' boxes and the edit buttons from viewer
+        self._destroy_ui_widgets(
+            [
+                "box_min_area_ch0",
+                "box_min_area_ch1",
+                "btn_filter_size",
+                "btn_discard_additions",
+                "btn_discard_deletions",
+                "btn_apply_edits",
+            ]
+        )
 
-            j = getattr(self.ui, i, None)
+    def _add_min_pct_ovl_boxes(self):
 
-            if j is not None:
-
-                self.layout.removeWidget(j)
-                j.hide()
-                j.deleteLater()
-                setattr(self.ui, i, None)
-
-    def _set_overlap_roi_ui(self):
-
-        # Add 'min % ovl' boxes and 'Find overlaps' button to viewer
+        # Add 'min % ovl' boxes to viewer
         box_min_pct_ovl_ch0_by_ch1 = ParamValueBox(
             label=f"min % overlap {self.workflow.ch_names[0]} / {self.workflow.ch_names[1]}",
             default=self.config["min_pct_ovl_ch0_by_ch1"],
@@ -1597,43 +1650,24 @@ class PluginManager(QWidget):
         )
         self.ui.box_min_pct_ovl_ch1_by_ch0 = box_min_pct_ovl_ch1_by_ch0
 
-        btn_overlap = QPushButton("Find overlaps")
-        btn_overlap.clicked.connect(self._on_overlap_clicked)
-        self.ui.btn_overlap = btn_overlap
-
-        for i, j in zip(
-            [0, 1, 2],
-            [
-                box_min_pct_ovl_ch0_by_ch1,
-                box_min_pct_ovl_ch1_by_ch0,
-                btn_overlap,
-            ],
-        ):
-
-            self.layout.insertWidget(i, j)
-
-        # Re-enable 'Clear' button
-        assert self.ui.btn_clear is not None
-        self.ui.btn_clear.setEnabled(True)
-
-    def _set_overlapping_roi_ui(self):
-
-        # Remove 'Find overlaps' button from viewer
-        btn_overlap = self.ui.btn_overlap
-        assert btn_overlap is not None
-        self.layout.removeWidget(btn_overlap)
-        btn_overlap.hide()
-        btn_overlap.deleteLater()
-        self.ui.btn_overlap = None
+        return [box_min_pct_ovl_ch0_by_ch1, box_min_pct_ovl_ch1_by_ch0]
 
     def _set_overlap_filter_or_save_ui(self, build_ui=True):
 
         if build_ui:
 
-            # Add 'Adjust overlap filter' button, 'element' boxes and 'Save results' button to viewer if overlaps are returned for the first time
+            # Add 'min % ovl' boxes, 'Adjust overlap filter' button, 'element'
+            # boxes, 'Edit ROIs' and 'Save results' buttons to viewer if overlaps
+            # are returned for the first time
+            box_min_pct_ovl_list = self._add_min_pct_ovl_boxes()
+
             btn_overlap_filter = QPushButton("Adjust overlap filter")
             btn_overlap_filter.clicked.connect(self._on_overlap_filter_clicked)
             self.ui.btn_overlap_filter = btn_overlap_filter
+
+            btn_edit_rois = QPushButton("Edit ROIs")
+            btn_edit_rois.clicked.connect(self._on_edit_rois_clicked)
+            self.ui.btn_edit_rois = btn_edit_rois
 
             btn_save = QPushButton("Save results")
             btn_save.clicked.connect(self._on_save_clicked)
@@ -1660,11 +1694,17 @@ class PluginManager(QWidget):
                 self.ui.btns_choose_rois[p.key] = box.btn_choose_rois
                 box_elem_list.append(box)
 
-            # Insert widgets: btn_overlap_filter, element boxes, btn_save
-            widgets_to_insert = [btn_overlap_filter] + box_elem_list + [btn_save]
+            # Insert widgets: min % ovl boxes, btn_overlap_filter, element boxes,
+            # btn_edit_rois, btn_save
+            widgets_to_insert = (
+                box_min_pct_ovl_list
+                + [btn_overlap_filter]
+                + box_elem_list
+                + [btn_edit_rois, btn_save]
+            )
 
             for i, w in enumerate(widgets_to_insert):
-                self.layout.insertWidget(2 + i, w)
+                self.layout.insertWidget(i, w)
 
         # Re-enable 'min % ovl' and 'element' boxes, 'Adjust overlap filter', 'Save results' and 'Clear' buttons
         # => 'Adjust overlap filter' button, 'element' boxes and 'Save results' button do not exist yet if overlaps are returned for the first time
@@ -1673,6 +1713,7 @@ class PluginManager(QWidget):
             self.ui.box_min_pct_ovl_ch1_by_ch0,
             self.ui.btn_overlap_filter,
             *self.ui.box_elems.values(),
+            self.ui.btn_edit_rois,
             self.ui.btn_save,
             self.ui.btn_clear,
         ]:
@@ -1688,40 +1729,26 @@ class PluginManager(QWidget):
 
     def _set_cleared_ui(self):
 
-        for i in [
-            "btn_clear",
-            "btn_load",
-            "btn_predict",
-            "btn_filter_size",
-            "box_min_area_ch0",
-            "box_min_area_ch1",
-            "btn_apply_edits",
-            "btn_overlap",
-            "btn_overlap_filter",
-            "box_min_pct_ovl_ch0_by_ch1",
-            "box_min_pct_ovl_ch1_by_ch0",
-            "btn_save",
-        ]:
+        self._destroy_ui_widgets(
+            [
+                "btn_clear",
+                "btn_load",
+                "btn_predict",
+                "btn_filter_size",
+                "btn_discard_additions",
+                "btn_discard_deletions",
+                "box_min_area_ch0",
+                "box_min_area_ch1",
+                "btn_apply_edits",
+                "btn_overlap_filter",
+                "btn_edit_rois",
+                "box_min_pct_ovl_ch0_by_ch1",
+                "box_min_pct_ovl_ch1_by_ch0",
+                "btn_save",
+            ]
+        )
 
-            j = getattr(self.ui, i, None)
-
-            if j is not None:
-
-                self.layout.removeWidget(j)
-                j.hide()
-                j.deleteLater()
-                setattr(self.ui, i, None)
-
-        # Tear down the per-population element boxes (held in a dict, not named attrs).
-        for box in self.ui.box_elems.values():
-            self.layout.removeWidget(box)
-            box.hide()
-            box.deleteLater()
-        self.ui.box_elems.clear()
-
-        # The "Choose ROIs" buttons live inside the element boxes and are destroyed
-        # together with them above; just drop the references.
-        self.ui.btns_choose_rois.clear()
+        self._destroy_elem_boxes()
 
     def _update_viewer_data_on_load_finished(self):
 
@@ -1753,7 +1780,7 @@ class PluginManager(QWidget):
         # reset_view sets camera.zoom = 0.95 * min(canvas_size / image_size), so the
         # zoom depends on the canvas size at this instant. Capturing it now — when it
         # provably matches the canvas the image was just fit to — avoids a race where a
-        # canvas resize between load and "Find overlaps" (e.g. entering full-screen)
+        # canvas resize between load and overlap-finish (e.g. entering full-screen)
         # inflates camera.zoom and makes the labels render far too small.
         self._roi_id_ref_zoom = self.viewer.camera.zoom
 
@@ -1773,14 +1800,6 @@ class PluginManager(QWidget):
                     # into edit_msk at apply-edits time.
                     labels.data = self.workflow.data[v]["filt_msk"].copy()
 
-    def _update_viewer_data_on_apply_edits_finished(self):
-
-        with self.viewer.layers.events.blocker():
-
-            self.layers["merge"].data = self.workflow.data["merge"][
-                "merge_norm_img_rois"
-            ]
-
     def _update_viewer_data_on_overlap_finished(self):
 
         roi_graphics = self.workflow.data.get("roi_graphics", {})
@@ -1798,6 +1817,18 @@ class PluginManager(QWidget):
         # current camera, which may have been zoomed by the user or rescaled by a
         # canvas resize since load.
 
+        # Updating the ROI-ID labels is order-sensitive. napari's vispy text node
+        # re-renders synchronously whenever layer.text.events fire, indexing the
+        # per-point text array with the layer's _indices_view. While the layer is
+        # invisible (as here, until the end), its slice is not refreshed, so
+        # _indices_view stays stale at the PREVIOUS overlap pass's (larger) point
+        # count. Assigning the new, shorter text/points then triggers an
+        # out-of-bounds index -> IndexError and a frozen viewer (seen on the second
+        # image after Clear, and on the Edit ROIs -> re-overlap round-trip).
+        #
+        # Fix: mutate data with the text-render callback blocked, force a slice
+        # refresh so _indices_view matches the final point count, and only then
+        # assign the text once against the now-consistent state.
         if len(ranked_ids) > 0:
             hex_colors = [
                 "#{:02x}{:02x}{:02x}".format(int(r * 255), int(g * 255), int(b * 255))
@@ -1809,19 +1840,25 @@ class PluginManager(QWidget):
                 "color": hex_colors,
                 "visible": True,
             }
-            # Set text before AND after data: assigning .data resets the TextManager,
-            # so the labels must be reapplied afterwards to survive the reset.
-            layer.text = text_dict
-            layer.data = pts
-            layer.text = text_dict
+        else:
+            text_dict = {"constant": ""}
+
+        with layer.text.events.blocker_all():
             layer.visible = True
-            # The dict above sets size to the raw base value, which would render at
+            layer.data = pts
+            # force=True refreshes the slice even though we just toggled visibility
+            # in the same blocked window, syncing _indices_view to len(pts).
+            layer.refresh(force=True)
+
+        # data, _indices_view and the text array are now consistent: assigning text
+        # here renders safely.
+        layer.text = text_dict
+
+        if len(ranked_ids) > 0:
+            # The dict sets size to the raw base value, which would render at
             # base / current_zoom. Rescale it to the load-time reference zoom so the
             # initial draw uses the same fixed apparent size as every later zoom step.
             self._update_roi_id_text_size()
-        else:
-            layer.data = pts
-            layer.visible = True
 
     def _update_roi_id_text_size(self, event=None):
 
@@ -1854,7 +1891,7 @@ class PluginManager(QWidget):
         if self.workflow.channel_mismatch:
 
             text = (
-                f"{text}\n\n\nWARNING: channel name mismatch between image and config."
+                f"{text}\n\n⚠ channel name mismatch between image and config."
             )
 
         self.msg_text.setText(text)
@@ -1868,6 +1905,13 @@ class PluginManager(QWidget):
             icon = QApplication.style().standardIcon(level.value)
             self.msg_icon.setPixmap(icon.pixmap(16, 16))
             self.msg_icon.setVisible(True)
+
+    def _show_busy_message(self, text: str):
+        """Show a busy message and flush pending events so it paints before the
+        (synchronous) viewer update that follows."""
+
+        self._set_message(text, MessageLevel.BUSY)
+        QApplication.processEvents()
 
     def _on_models_loaded(self, models: dict):
 
@@ -1995,9 +2039,7 @@ class PluginManager(QWidget):
 
             self.workflow.ch_names[i] = metadata["channels"][i]["name"]
 
-        self._set_message("Updating viewer...", MessageLevel.BUSY)
-
-        QApplication.processEvents()
+        self._show_busy_message("Updating viewer...")
 
         self._update_viewer_data_on_load_finished()
 
@@ -2049,6 +2091,56 @@ class PluginManager(QWidget):
 
         self._start_predict_filter_thread(do_predict=False)
 
+    def _select_channels(self, title: str, prompt: str):
+        """Show the channel-selection dialog; return the chosen channel indices.
+
+        Returns an empty list if the dialog is cancelled or nothing is selected.
+        """
+
+        dialog = ChannelSelectWindow(
+            title=title,
+            channel_names=self.workflow.ch_names,
+            prompt=prompt,
+            parent=self,
+        )
+
+        if not dialog.exec_():
+            return []
+
+        return dialog.selected_channels()
+
+    def _on_discard_additions_clicked(self):
+
+        # Ask which channel(s) to clear, then drop the manually drawn ROIs (the
+        # shapes layer) for each. StarDist masks (labels layer) are untouched.
+        channels = self._select_channels(
+            title="Discard added ROIs",
+            prompt="Remove all manually added ROIs in:",
+        )
+
+        for k in channels:
+            shapes = self.layers[k]["shapes"]
+            with shapes.events.blocker():
+                shapes.data = []
+
+    def _on_discard_deletions_clicked(self):
+
+        # Ask which channel(s) to restore, then reset the labels layer back to the
+        # clean size-filtered StarDist prediction (filt_msk), bringing back every
+        # manually erased cell. Manually added ROIs (the shapes layer) are untouched.
+        channels = self._select_channels(
+            title="Restore deleted ROIs",
+            prompt="Restore all manually deleted StarDist ROIs in:",
+        )
+
+        for k in channels:
+            ch_nm = self.workflow.ch_names[k]
+            labels = self.layers[k]["labels"]
+            with labels.events.blocker():
+                # Hand over a copy so subsequent erasing does not mutate the stored
+                # filt_msk (see _update_viewer_data_on_predict_filter_finished).
+                labels.data = self.workflow.data[ch_nm]["filt_msk"].copy()
+
     def _on_predict_filter_finished(self, worker_output: dict):
 
         output = worker_output["output"]
@@ -2058,9 +2150,7 @@ class PluginManager(QWidget):
 
             self.workflow.data[k].update(v)
 
-        self._set_message("Updating viewer...", MessageLevel.BUSY)
-
-        QApplication.processEvents()
+        self._show_busy_message("Updating viewer...")
 
         self._update_viewer_data_on_predict_filter_finished(filt_msk_changed=changed)
 
@@ -2073,6 +2163,9 @@ class PluginManager(QWidget):
 
     def _on_apply_edits_clicked(self):
 
+        # The merge layer is hidden during the compute (APPLYING_EDITS / OVERLAPPING_ROI
+        # map to the IMAGE_LOADED viewer state) and only revealed with the status image
+        # once overlaps finish, so there is no stale/placeholder merge to manage here.
         self._set_workflow_state(state=WorkflowState.APPLYING_EDITS)
 
         self._set_message("Applying edits...", MessageLevel.WORK)
@@ -2107,31 +2200,16 @@ class PluginManager(QWidget):
 
     def _on_apply_edits_finished(self, worker_output: dict):
 
+        # ApplyEditsWorker only outputs per-channel edit data (the merge image is
+        # built by OverlapWorker), so every key is a channel sub-dict.
         for k, v in worker_output.items():
 
-            if k == "merge":
+            self.workflow.data[k].update(v)
 
-                self.workflow.data["merge"] = v
-
-            else:
-
-                self.workflow.data[k].update(v)
-
-        self._set_message("Updating viewer...", MessageLevel.BUSY)
-
-        QApplication.processEvents()
-
-        self._update_viewer_data_on_apply_edits_finished()
-
-        self._set_workflow_state(state=WorkflowState.OVERLAP_ROI)
-
-        self._set_message(
-            "Edits applied",
-            MessageLevel.CHECK,
-        )
-
-    def _on_overlap_clicked(self):
-
+        # No viewer update here: the merge layer stays hidden through the compute and
+        # is revealed with the status image when overlaps finish. Overlap analysis no
+        # longer needs a separate "Find overlaps" click: chain straight into the
+        # overlap worker and land on the save-results window.
         self._set_workflow_state(state=WorkflowState.OVERLAPPING_ROI)
 
         self._set_message("Computing overlaps...", MessageLevel.WORK)
@@ -2151,6 +2229,44 @@ class PluginManager(QWidget):
         # Trigger overlap worker thread
         self._start_overlap_thread()
 
+    def _teardown_overlap_filter_or_save_ui(self):
+
+        # Remove the save-results widgets so the panel can be rebuilt for an
+        # earlier step (Edit ROIs) or repopulated on the next overlap pass.
+        self._destroy_ui_widgets(
+            [
+                "box_min_pct_ovl_ch0_by_ch1",
+                "box_min_pct_ovl_ch1_by_ch0",
+                "btn_overlap_filter",
+                "btn_edit_rois",
+                "btn_save",
+            ]
+        )
+
+        self._destroy_elem_boxes()
+
+    def _on_edit_rois_clicked(self):
+
+        # Step back from the save-results window to the ROI-editing step so the
+        # user can add / remove ROIs without clearing and re-predicting. The
+        # editing layers still hold the masks and drawn shapes from the last edit,
+        # so editing resumes exactly where it left off; re-applying edits then
+        # recomputes overlaps and returns here.
+        self._teardown_overlap_filter_or_save_ui()
+
+        # Manual ROI selections refer to the overlap result that is about to be
+        # recomputed; drop them so the next pass starts from the default top-N.
+        self._manual_selections.clear()
+
+        # The size-filter boxes were removed when edits were last applied; rebuild
+        # them so the apply-edits panel is complete again.
+        self._add_min_area_boxes()
+
+        self._set_workflow_state(state=WorkflowState.APPLY_EDITS, force=True)
+
+        # Clear the "Results saved" message left over from the save-results window.
+        self._set_message("", MessageLevel.NONE)
+
     def _start_overlap_thread(self):
 
         self._start_worker_thread(
@@ -2163,24 +2279,31 @@ class PluginManager(QWidget):
 
     def _on_overlap_finished(self, worker_output: dict):
 
+        # "merge" and "roi_graphics" are complete dicts built fresh by OverlapWorker
+        # (the merge dict may not exist yet on the first pass), so replace them; the
+        # remaining keys are per-channel sub-dicts to merge in.
         for k, v in worker_output.items():
 
-            if k == "roi_graphics":
+            if k in ("roi_graphics", "merge"):
 
-                self.workflow.data["roi_graphics"] = v
+                self.workflow.data[k] = v
 
             else:
 
                 self.workflow.data[k].update(v)
 
         # Delay viewer update
-        self._set_message("Updating viewer...", MessageLevel.BUSY)
+        self._show_busy_message("Updating viewer...")
 
-        QApplication.processEvents()
+        # Establish the LOCKED viewer state BEFORE applying the overlap data. The
+        # LOCKED baseline hides the rois layer; _update_viewer_data_on_overlap_finished
+        # then re-shows it on top (and sizes its text for the current zoom). Doing it
+        # in the reverse order would re-hide the freshly shown labels — and a later
+        # manual toggle would draw them at a stale, oversized text size because the
+        # zoom-tracking rescale is skipped while the layer is hidden.
+        self._set_viewer_state(ViewerState.LOCKED)
 
         self._update_viewer_data_on_overlap_finished()
-
-        self._set_viewer_state(ViewerState.LOCKED)
 
         if self.state.workflow_state == WorkflowState.OVERLAPPING_ROI:
 
@@ -2299,19 +2422,28 @@ class PluginManager(QWidget):
             MessageLevel.SAVE,
         )
 
-        print(f"Collect / omit summary - {self.workflow.metadata['img_nm']}:\n")
-
+        # Print the collect/omit summary to the terminal, but only when its content
+        # differs from the last one printed, so repeated saves of an unchanged
+        # selection don't spam the terminal.
+        summary_lines = [
+            f"Collect / omit summary - {self.workflow.metadata['img_nm']}:\n"
+        ]
         for p in self._populations_in_config_order():
             collection_summary = self.workflow.data[
                 self.workflow.ch_names[p.primary_ch]
             ]["collection_summary"]
-            print(
+            summary_lines.append(
                 f"- {self._elem_label(p)}: "
                 f"{collection_summary[f'{p.status}_collect']} / {collection_summary[p.status]} "
                 f"({collection_summary[f'{p.status}_tube_id']})"
             )
 
-        print("\n")
+        summary = "\n".join(summary_lines)
+
+        if summary != self._last_collection_summary_print:
+            print(summary)
+            print("\n")
+            self._last_collection_summary_print = summary
 
     def _populations_in_config_order(self) -> list[Population]:
         """Populations ordered as the user listed them in config['elements']."""
@@ -2437,17 +2569,23 @@ class PluginManager(QWidget):
         return len(selected), total_area
 
     def _selection_summary_message(self):
-        """Build a message summarising selected ROI count and area per population."""
-        lines = []
-        if self._tube_match_warning is not None:
-            lines.append(f"⚠ {self._tube_match_warning}\n")
-        lines.append("Selection summary:\n")
+        """Build a message summarising selected ROI count and area per population.
+
+        Any tube-ID matching warning is shown below the summary (and above the
+        channel-mismatch warning that _set_message appends afterwards).
+        """
+        lines = ["Selection summary:\n"]
         for p in self._populations_in_config_order():
             n, area = self._pop_selection_summary(p.key)
             base_label = self._get_elem_box(p.key).base_label
             lines.append(f"- {base_label}: {n} ROIs  |  {area:.0f} µm²")
 
-        return "\n".join(lines)
+        message = "\n".join(lines)
+
+        if self._tube_match_warning is not None:
+            message += f"\n\n⚠ {self._tube_match_warning}"
+
+        return message
 
     def _refresh_selection_summary(self):
         """Re-render the per-population selection summary in the message box."""

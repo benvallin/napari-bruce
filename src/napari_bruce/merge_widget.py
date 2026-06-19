@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+from qtpy.QtGui import QFont
+
 from qtpy.QtWidgets import (
     QApplication,
     QDialog,
@@ -59,6 +61,18 @@ class MergeElemLists(QDialog):
         self._folders: list[Path] = []
         self._checked: dict[str, bool] = {}
 
+        # Folder selection of the last completed merge (set of resolved path strings),
+        # used to disable Merge until the selection changes again.
+        self._last_merged_selection = None
+
+        # Explicit base font (point size + weight set so its resolve mask is
+        # non-empty) used to keep group-box CONTENTS at the default size while only
+        # the titles are enlarged. A plain QApplication.font() has an empty resolve
+        # mask, so assigning it does not override the inherited enlarged title font.
+        self._content_font = QFont()
+        self._content_font.setPointSize(QApplication.font().pointSize())
+        self._content_font.setBold(False)
+
         layout = QVBoxLayout(self)
 
         # Parent folder holding the per-image result subfolders.
@@ -109,11 +123,16 @@ class MergeElemLists(QDialog):
         dir_row.addWidget(btn_browse_out)
         out_layout.addLayout(dir_row)
         name_row = QHBoxLayout()
-        name_row.addWidget(QLabel("File name"))
-        self.edit_filename = QLineEdit("merged_elem_list")
+        name_row.addWidget(QLabel("File name prefix"))
+        self.edit_filename = QLineEdit("")
         name_row.addWidget(self.edit_filename, stretch=1)
         out_layout.addLayout(name_row)
         layout.addWidget(out_box)
+
+        # Status message shown in-window after a merge (replaces a pop-up dialog).
+        self.status_label = QLabel("")
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
 
         # Action buttons.
         action_row = QHBoxLayout()
@@ -121,14 +140,30 @@ class MergeElemLists(QDialog):
         btn_close = QPushButton("Close")
         btn_close.clicked.connect(self.reject)
         action_row.addWidget(btn_close)
-        btn_merge = QPushButton("Merge")
-        btn_merge.setDefault(True)
-        btn_merge.clicked.connect(self._on_merge)
-        action_row.addWidget(btn_merge)
+        self.btn_merge = QPushButton("Merge")
+        self.btn_merge.setDefault(True)
+        self.btn_merge.clicked.connect(self._on_merge)
+        action_row.addWidget(self.btn_merge)
         layout.addLayout(action_row)
 
-        # Seed the list from the default results folder.
+        # Seed the list from the default results folder (also sets Merge enabled state).
         self._add_folders(_list_mergeable_subfolders(self.edit_parent.text()))
+
+        # Enlarge the group-box titles (Results folder, Image folders to merge, ...).
+        self._style_group_titles()
+
+    def _style_group_titles(self) -> None:
+        """Enlarge/bold every group-box title while leaving contents at the default
+        font, matching the --edit-config window."""
+
+        title_font = QFont()
+        title_font.setPointSize(13)
+        title_font.setBold(True)
+
+        for box in self.findChildren(QGroupBox):
+            box.setFont(title_font)
+            for child in box.findChildren(QWidget):
+                child.setFont(self._content_font)
 
     # -- Folder list ------------------------------------------------------
 
@@ -156,19 +191,22 @@ class MergeElemLists(QDialog):
             self._folders_container_layout.addWidget(
                 QLabel("No image folders selected.")
             )
+            self._update_merge_enabled()
             return
 
         for folder in self._folders:
             row = QWidget()
+            # Rows are created after the group-box titles are enlarged; pin them to
+            # the content font so new checkboxes don't inherit the big title font.
+            row.setFont(self._content_font)
             row_layout = QHBoxLayout(row)
             row_layout.setContentsMargins(0, 0, 0, 0)
 
             cb = QCheckBox(folder.name)
             cb.setChecked(self._checked.get(str(folder), True))
             cb.setToolTip(str(folder))
-            cb._folder_path = folder
             cb.toggled.connect(
-                lambda checked, f=str(folder): self._checked.__setitem__(f, checked)
+                lambda checked, f=str(folder): self._on_checkbox_toggled(f, checked)
             )
             row_layout.addWidget(cb, stretch=1)
 
@@ -179,6 +217,8 @@ class MergeElemLists(QDialog):
             self._folders_container_layout.addWidget(row)
 
         self._folders_container_layout.addStretch()
+
+        self._update_merge_enabled()
 
     def _remove_folder(self, folder: Path) -> None:
 
@@ -191,6 +231,21 @@ class MergeElemLists(QDialog):
 
         for cb in self._checkboxes():
             cb.setChecked(checked)
+
+        self._update_merge_enabled()
+
+    def _on_checkbox_toggled(self, folder_key: str, checked: bool) -> None:
+
+        self._checked[folder_key] = checked
+        self._update_merge_enabled()
+
+    def _update_merge_enabled(self) -> None:
+        """Enable Merge only with >=2 folders selected and a selection that differs
+        from the last completed merge."""
+
+        selected = {str(f) for f in self._selected_folders()}
+        unchanged = selected == self._last_merged_selection
+        self.btn_merge.setEnabled(len(selected) >= 2 and not unchanged)
 
     def _checkboxes(self) -> list[QCheckBox]:
 
@@ -240,13 +295,9 @@ class MergeElemLists(QDialog):
 
     def _on_merge(self) -> None:
 
+        # The Merge button is only enabled with >=2 selected folders and a changed
+        # selection (see _update_merge_enabled), so no folder-count guard is needed.
         folders = self._selected_folders()
-
-        if not folders:
-            QMessageBox.warning(
-                self, "No folders selected", "Select at least one image folder."
-            )
-            return
 
         out_dir = Path(self.edit_out.text()).expanduser()
 
@@ -256,9 +307,11 @@ class MergeElemLists(QDialog):
             )
             return
 
-        base = self.edit_filename.text().strip() or "merged_elem_list"
-        if base.lower().endswith(".txt"):
-            base = base[:-4]
+        # The file name is "<prefix>_merged_elem_list<suffix>", where the optional
+        # user prefix is prepended (omitted entirely when blank) and the suffix is
+        # always the group name.
+        prefix = self.edit_filename.text().strip()
+        base = f"{prefix}_merged_elem_list" if prefix else "merged_elem_list"
 
         try:
             merged = workflow.merge_elem_lists(folder_paths=folders)
@@ -268,11 +321,19 @@ class MergeElemLists(QDialog):
             )
             return
 
-        # Single 'collect' group -> use the name as-is; otherwise suffix the group.
-        if list(merged) == ["collect"]:
-            names = {"collect": f"{base}.txt"}
-        else:
-            names = {nm: f"{base}_{nm}.txt" for nm in merged}
+        # Always suffix the group name (collect / omit / all), mirroring single-run
+        # output (elem_list_collect.txt, ...), so a collect-only merge still gets the
+        # "_collect" suffix. To avoid overwriting a previous merge, bump a numeric
+        # tag "(1)", "(2)", ... applied to the whole group so the set stays together
+        # (collect/omit/all share one index) and no member collides with an existing
+        # file.
+        n = 0
+        while True:
+            tag = "" if n == 0 else f" ({n})"
+            names = {nm: f"{base}_{nm}{tag}.txt" for nm in merged}
+            if not any((out_dir / fn).exists() for fn in names.values()):
+                break
+            n += 1
 
         written = []
         for nm, txt in merged.items():
@@ -284,13 +345,17 @@ class MergeElemLists(QDialog):
         paths = "\n".join(str(p) for p in written)
         print(f"Merged {len(folders)} element list(s) into:\n{paths}\n")
 
-        QMessageBox.information(
-            self,
-            "Element lists merged",
-            f"Merged {len(folders)} folder(s) into:\n\n{paths}",
+        # Report completion in-window rather than via a pop-up dialog.
+        file_names = "\n".join(names[nm] for nm in merged)
+        self.status_label.setText(
+            f"✔ Merged {len(folders)} folder(s) into:\n{file_names}"
         )
 
-        # Stay open so the user can run further merges without relaunching.
+        # Stay open so the user can run further merges without relaunching, but
+        # disable Merge until the folder selection changes (avoids re-merging the
+        # exact same set).
+        self._last_merged_selection = {str(f) for f in folders}
+        self._update_merge_enabled()
 
 
 # %% launch_merge_elem_lists() ----

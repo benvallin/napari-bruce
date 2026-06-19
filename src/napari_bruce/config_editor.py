@@ -161,7 +161,13 @@ class ConfigEditor(QDialog):
         title_font.setPointSize(13)
         title_font.setBold(True)
 
-        base_font = QApplication.font()
+        # Explicit base font (point size + weight set so its resolve mask is
+        # non-empty). A plain QApplication.font() has an empty resolve mask, so
+        # assigning it would NOT override the inherited enlarged title font and the
+        # contents would be enlarged too.
+        base_font = QFont()
+        base_font.setPointSize(QApplication.font().pointSize())
+        base_font.setBold(False)
 
         for box in self.findChildren(QGroupBox):
             box.setFont(title_font)

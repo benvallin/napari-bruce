@@ -513,6 +513,148 @@ def status_dict_to_cnts(status_dict: dict, cnt_dict: dict) -> dict:
     return cnts
 
 
+# %% make_merge_norm_img() ----
+
+
+def make_merge_norm_img(
+    img0: np.ndarray,
+    img1: np.ndarray,
+    rgba0,
+    rgba1,
+    scale: float = 0.8,
+) -> np.ndarray:
+    """Blend two single-channel normalized images into an RGB merge image.
+
+    Args:
+      img0, img1 (numpy.ndarray): 2D normalized channel images.
+      rgba0, rgba1 (sequence): per-channel color as (r, g, b, ...) floats in 0-1;
+        only the RGB components are used.
+      scale (float): brightness scaling applied to the blend.
+
+    Returns:
+      numpy.ndarray: (H, W, 3) uint8 RGB merge image.
+
+    """
+
+    a = img0.astype(np.float32)
+    b = img1.astype(np.float32)
+
+    merge = np.stack(
+        [
+            scale * (a * rgba0[0] + b * rgba1[0]),
+            scale * (a * rgba0[1] + b * rgba1[1]),
+            scale * (a * rgba0[2] + b * rgba1[2]),
+        ],
+        axis=-1,
+    )
+
+    return np.clip(merge, 0, 255).astype(np.uint8)
+
+
+# %% _contour_centroid_yx() ----
+
+
+def _contour_centroid_yx(cnt: np.ndarray):
+    """(row, col) centroid of a contour, or None if it has zero area."""
+
+    import cv2
+
+    M = cv2.moments(cnt.reshape(-1, 1, 2).astype(np.int32))
+
+    if M["m00"] == 0:
+
+        return None
+
+    return int(M["m01"] / M["m00"]), int(M["m10"] / M["m00"])
+
+
+# %% draw_status_contours() ----
+
+
+def draw_status_contours(
+    merge_norm_img: np.ndarray,
+    cnts_by_ch_idx: dict,
+    pop_colors_rgb: dict,
+    thickness: int = 4,
+) -> np.ndarray:
+    """Draw per-population status contours onto a copy of the merge image.
+
+    Args:
+      merge_norm_img (numpy.ndarray): base RGB merge image (not modified in place).
+      cnts_by_ch_idx (dict): {0: {status: {id: contour}}, 1: {...}} contours per
+        channel index and status.
+      pop_colors_rgb (dict): {population key: (r, g, b)} ints in 0-255.
+      thickness (int): contour line thickness.
+
+    Returns:
+      numpy.ndarray: merge image with status contours drawn in POPULATIONS order.
+
+    """
+
+    import cv2
+
+    output = merge_norm_img.copy()
+
+    for p in POPULATIONS:
+
+        cnts = cnts_by_ch_idx[p.primary_ch][p.status]
+
+        output = cv2.drawContours(
+            image=output,
+            contours=[c for c in cnts.values()],
+            contourIdx=-1,
+            color=pop_colors_rgb[p.key],
+            thickness=thickness,
+        )
+
+    return output
+
+
+# %% build_roi_graphics() ----
+
+
+def build_roi_graphics(cnts_by_ch_idx: dict, pop_colors_rgba: dict) -> dict:
+    """Build the ROI-ID Points overlay data (centroids, rank labels, colors).
+
+    Ranks restart at 1 within each population and may repeat across populations.
+    A contour whose centroid is undefined (zero area) is skipped.
+
+    Args:
+      cnts_by_ch_idx (dict): {0: {status: {id: contour}}, 1: {...}}.
+      pop_colors_rgba (dict): {population key: (r, g, b, a)} floats in 0-1.
+
+    Returns:
+      dict: {'ranked_ids' (list[str]), 'centroids' (N, 2) float, 'colors' (N, 4) float}.
+
+    """
+
+    ranked_ids, centroids, colors = [], [], []
+
+    for p in POPULATIONS:
+
+        rgba = pop_colors_rgba[p.key]
+
+        for rank, cnt in enumerate(
+            cnts_by_ch_idx[p.primary_ch][p.status].values(), start=1
+        ):
+
+            pt = _contour_centroid_yx(cnt)
+
+            if pt is not None:
+
+                ranked_ids.append(str(rank))
+                centroids.append(pt)
+                colors.append(rgba)
+
+    return {
+        "ranked_ids": ranked_ids,
+        "centroids": (
+            np.array(centroids, dtype=float) if centroids else np.zeros((0, 2))
+        ),
+        "colors": np.array(colors, dtype=float) if colors else np.zeros((0, 4)),
+    }
+
+
 # %% require_java() ----
 
 
