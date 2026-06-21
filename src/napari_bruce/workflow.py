@@ -14,7 +14,7 @@ from pathlib import Path
 from datetime import datetime
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, Sequence
 
 # %% Population descriptors ----
 
@@ -1518,7 +1518,7 @@ Elements :\n
 
 
 def merge_elem_lists(
-    folder_paths: list[str | Path], comment_sep: str = " | "
+    folder_paths: Sequence[str | Path], comment_sep: str = " | "
 ) -> dict:
     """Combine the PALMRobo element lists produced by several bruce runs.
 

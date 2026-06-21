@@ -435,15 +435,14 @@ class ConfigEditor(QDialog):
         self.accept()
 
 
-# %% launch_config_editor() ----
+# %% launch_config_dialog() ----
 
 
-def launch_config_editor() -> None:
+def launch_config_dialog() -> None:
     """Open the standalone configuration editor window."""
 
     app = QApplication.instance()
-    owns_app = app is None
-    if owns_app:
+    if app is None:
         app = QApplication([])
 
     dialog = ConfigEditor()

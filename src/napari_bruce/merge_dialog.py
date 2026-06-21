@@ -61,9 +61,14 @@ class MergeElemLists(QDialog):
         self._folders: list[Path] = []
         self._checked: dict[str, bool] = {}
 
-        # Folder selection of the last completed merge (set of resolved path strings),
-        # used to disable Merge until the selection changes again.
-        self._last_merged_selection = None
+        # Resolved path strings of experiments added via "Add experiment". Refresh
+        # keeps these as long as they still exist on disk, even when they live
+        # outside the current input directory.
+        self._manual: set[str] = set()
+
+        # State of the last completed merge — (selected path strings, output dir,
+        # file name prefix) — used to disable Merge until any of these changes again.
+        self._last_merged_state = None
 
         # Explicit base font (point size + weight set so its resolve mask is
         # non-empty) used to keep group-box CONTENTS at the default size while only
@@ -76,7 +81,7 @@ class MergeElemLists(QDialog):
         layout = QVBoxLayout(self)
 
         # Parent folder holding the per-image result subfolders.
-        parent_box = QGroupBox("Results folder")
+        parent_box = QGroupBox("Input directory")
         parent_layout = QHBoxLayout(parent_box)
         self.edit_parent = QLineEdit(self.config["out_dir_path"])
         parent_layout.addWidget(self.edit_parent, stretch=1)
@@ -86,17 +91,20 @@ class MergeElemLists(QDialog):
         layout.addWidget(parent_box)
 
         # Checkable list of image folders.
-        folders_box = QGroupBox("Image folders to merge")
+        folders_box = QGroupBox("Experiments to merge")
         folders_layout = QVBoxLayout(folders_box)
 
         select_row = QHBoxLayout()
-        btn_add = QPushButton("Add folder…")
+        btn_add = QPushButton("Add experiment")
         btn_add.clicked.connect(self._on_add_folder)
+        btn_refresh = QPushButton("Refresh")
+        btn_refresh.clicked.connect(self._on_refresh)
         btn_all = QPushButton("Select all")
         btn_all.clicked.connect(lambda: self._set_all_checked(True))
         btn_none = QPushButton("Select none")
         btn_none.clicked.connect(lambda: self._set_all_checked(False))
         select_row.addWidget(btn_add)
+        select_row.addWidget(btn_refresh)
         select_row.addWidget(btn_all)
         select_row.addWidget(btn_none)
         select_row.addStretch()
@@ -112,22 +120,25 @@ class MergeElemLists(QDialog):
 
         layout.addWidget(folders_box, stretch=1)
 
-        # Output folder + file name for the merged list.
-        out_box = QGroupBox("Save merged list to")
-        out_layout = QVBoxLayout(out_box)
-        dir_row = QHBoxLayout()
+        # Output folder for the merged list.
+        out_box = QGroupBox("Output directory")
+        out_layout = QHBoxLayout(out_box)
         self.edit_out = QLineEdit(self.config["out_dir_path"])
-        dir_row.addWidget(self.edit_out, stretch=1)
+        self.edit_out.textChanged.connect(self._update_merge_enabled)
+        out_layout.addWidget(self.edit_out, stretch=1)
         btn_browse_out = QPushButton("Browse…")
         btn_browse_out.clicked.connect(self._on_browse_out)
-        dir_row.addWidget(btn_browse_out)
-        out_layout.addLayout(dir_row)
-        name_row = QHBoxLayout()
-        name_row.addWidget(QLabel("File name prefix"))
-        self.edit_filename = QLineEdit("")
-        name_row.addWidget(self.edit_filename, stretch=1)
-        out_layout.addLayout(name_row)
+        out_layout.addWidget(btn_browse_out)
         layout.addWidget(out_box)
+
+        # File name prefix for the merged list.
+        name_box = QGroupBox("File name")
+        name_layout = QHBoxLayout(name_box)
+        name_layout.addWidget(QLabel("Prefix"))
+        self.edit_filename = QLineEdit("")
+        self.edit_filename.textChanged.connect(self._update_merge_enabled)
+        name_layout.addWidget(self.edit_filename, stretch=1)
+        layout.addWidget(name_box)
 
         # Status message shown in-window after a merge (replaces a pop-up dialog).
         self.status_label = QLabel("")
@@ -149,7 +160,7 @@ class MergeElemLists(QDialog):
         # Seed the list from the default results folder (also sets Merge enabled state).
         self._add_folders(_list_mergeable_subfolders(self.edit_parent.text()))
 
-        # Enlarge the group-box titles (Results folder, Image folders to merge, ...).
+        # Enlarge the group-box titles (Input directory, Experiments to merge, ...).
         self._style_group_titles()
 
     def _style_group_titles(self) -> None:
@@ -168,13 +179,13 @@ class MergeElemLists(QDialog):
     # -- Folder list ------------------------------------------------------
 
     def _add_folders(self, paths) -> None:
-        """Append new folders (deduped, default-checked) and rebuild the rows."""
+        """Append new folders (deduped, unchecked by default) and rebuild the rows."""
 
         for p in paths:
             p = Path(p).expanduser().resolve()
             if p not in self._folders:
                 self._folders.append(p)
-                self._checked.setdefault(str(p), True)
+                self._checked.setdefault(str(p), False)
 
         self._rebuild_rows()
 
@@ -188,9 +199,6 @@ class MergeElemLists(QDialog):
                 w.deleteLater()
 
         if not self._folders:
-            self._folders_container_layout.addWidget(
-                QLabel("No image folders selected.")
-            )
             self._update_merge_enabled()
             return
 
@@ -203,7 +211,7 @@ class MergeElemLists(QDialog):
             row_layout.setContentsMargins(0, 0, 0, 0)
 
             cb = QCheckBox(folder.name)
-            cb.setChecked(self._checked.get(str(folder), True))
+            cb.setChecked(self._checked.get(str(folder), False))
             cb.setToolTip(str(folder))
             cb.toggled.connect(
                 lambda checked, f=str(folder): self._on_checkbox_toggled(f, checked)
@@ -225,6 +233,7 @@ class MergeElemLists(QDialog):
         if folder in self._folders:
             self._folders.remove(folder)
         self._checked.pop(str(folder), None)
+        self._manual.discard(str(folder))
         self._rebuild_rows()
 
     def _set_all_checked(self, checked: bool) -> None:
@@ -240,11 +249,13 @@ class MergeElemLists(QDialog):
         self._update_merge_enabled()
 
     def _update_merge_enabled(self) -> None:
-        """Enable Merge only with >=2 folders selected and a selection that differs
-        from the last completed merge."""
+        """Enable Merge only with >=2 folders selected and a state (selection,
+        output directory, file name prefix) that differs from the last completed
+        merge."""
 
         selected = {str(f) for f in self._selected_folders()}
-        unchanged = selected == self._last_merged_selection
+        state = (selected, self.edit_out.text(), self.edit_filename.text())
+        unchanged = state == self._last_merged_state
         self.btn_merge.setEnabled(len(selected) >= 2 and not unchanged)
 
     def _checkboxes(self) -> list[QCheckBox]:
@@ -267,10 +278,40 @@ class MergeElemLists(QDialog):
             self.edit_out.setText(path)
             self._add_folders(_list_mergeable_subfolders(path))
 
+    def _on_refresh(self) -> None:
+        """Resync the experiment list with the input directory.
+
+        Mergeable subfolders of the input directory are added; current
+        experiments that are no longer mergeable subfolders are dropped — except
+        experiments added via "Add experiment", which are kept as long as their
+        folder still holds an element list at its original location.
+        """
+
+        scanned = [
+            Path(p).expanduser().resolve()
+            for p in _list_mergeable_subfolders(self.edit_parent.text())
+        ]
+        scanned_keys = {str(p) for p in scanned}
+
+        kept: list[Path] = []
+        for folder in self._folders:
+            key = str(folder)
+            if key in scanned_keys:
+                kept.append(folder)
+            elif key in self._manual and (folder / "elem_list_collect.txt").exists():
+                kept.append(folder)
+            else:
+                self._checked.pop(key, None)
+                self._manual.discard(key)
+        self._folders = kept
+
+        # Add any newly available subfolders (deduped against what was kept).
+        self._add_folders(scanned)
+
     def _on_add_folder(self) -> None:
 
         path = QFileDialog.getExistingDirectory(
-            self, "Add image folder", self.edit_parent.text()
+            self, "Add experiment", self.edit_parent.text()
         )
         if not path:
             return
@@ -281,6 +322,7 @@ class MergeElemLists(QDialog):
                 f"This folder has no elem_list_collect.txt:\n{path}",
             )
             return
+        self._manual.add(str(Path(path).expanduser().resolve()))
         self._add_folders([path])
 
     def _on_browse_out(self) -> None:
@@ -348,25 +390,28 @@ class MergeElemLists(QDialog):
         # Report completion in-window rather than via a pop-up dialog.
         file_names = "\n".join(names[nm] for nm in merged)
         self.status_label.setText(
-            f"✔ Merged {len(folders)} folder(s) into:\n{file_names}"
+            f"✔ Merged {len(folders)} experiments into:\n{file_names}"
         )
 
         # Stay open so the user can run further merges without relaunching, but
-        # disable Merge until the folder selection changes (avoids re-merging the
-        # exact same set).
-        self._last_merged_selection = {str(f) for f in folders}
+        # disable Merge until the selection, output directory, or file name prefix
+        # changes (avoids re-merging the exact same set to the same output).
+        self._last_merged_state = (
+            {str(f) for f in folders},
+            self.edit_out.text(),
+            self.edit_filename.text(),
+        )
         self._update_merge_enabled()
 
 
-# %% launch_merge_elem_lists() ----
+# %% launch_merge_dialog() ----
 
 
-def launch_merge_elem_lists() -> None:
+def launch_merge_dialog() -> None:
     """Open the standalone element-list merge window."""
 
     app = QApplication.instance()
-    owns_app = app is None
-    if owns_app:
+    if app is None:
         app = QApplication([])
 
     dialog = MergeElemLists()

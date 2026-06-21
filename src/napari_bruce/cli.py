@@ -277,9 +277,9 @@ def cli_main(argv: list[str] | None = None) -> None:
             if not os.path.exists(config_path):
                 configuration.make_default_config()
 
-            from .config_editor import launch_config_editor
+            from .config_dialog import launch_config_dialog
 
-            launch_config_editor()
+            launch_config_dialog()
 
             return
 
@@ -297,9 +297,9 @@ def cli_main(argv: list[str] | None = None) -> None:
             if not os.path.exists(config_path):
                 configuration.make_default_config()
 
-            from .merge_widget import launch_merge_elem_lists
+            from .merge_dialog import launch_merge_dialog
 
-            launch_merge_elem_lists()
+            launch_merge_dialog()
 
             return
 
