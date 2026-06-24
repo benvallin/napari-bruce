@@ -1489,13 +1489,6 @@ class PluginManager(QWidget):
 
             self._set_load_image_ui()
 
-        elif workflow_state in {
-            WorkflowState.LOADING_IMAGE,
-            WorkflowState.LOADING_IMAGE_FOR_PREDICT_ROI,
-        }:
-
-            self._set_loading_image_ui()
-
         elif workflow_state == WorkflowState.PREDICT_ROI:
 
             self._set_predict_roi_ui(loaded_for_predict=False)
@@ -1615,9 +1608,6 @@ class PluginManager(QWidget):
         for i, j in zip([4, 5, 6], [btn_load, btn_predict, btn_clear]):
 
             self.layout.insertWidget(i, j)
-
-    def _set_loading_image_ui(self):
-        pass
 
     def _add_min_area_boxes(self, insert_pos: int = 0):
 
@@ -2220,7 +2210,6 @@ class PluginManager(QWidget):
 
         if self._pending_predict:
             self._pending_predict = False
-            self._set_workflow_state(state=WorkflowState.PREDICTING_ROI)
             self._on_img_loaded_and_predict_clicked()
         else:
             self._set_ui_enabled(True)
