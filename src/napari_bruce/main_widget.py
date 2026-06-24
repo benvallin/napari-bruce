@@ -873,6 +873,10 @@ class PluginManager(QWidget):
 
         self._install_layer_colors()
 
+        self._install_layer_delete_guard()
+
+        self._remove_layer_buttons()
+
         self.viewer.camera.events.zoom.connect(self._update_roi_id_text_size)
 
         message = f"""Loading StarDist models...
@@ -927,6 +931,49 @@ class PluginManager(QWidget):
     def _refresh_layer_colors(self, _event=None):
         if hasattr(self, "_layer_delegate"):
             self._layer_delegate._layer_colors = self._build_layer_colors()
+
+    def _install_layer_delete_guard(self):
+        # Prevent the user from accidentally deleting Bruce's managed layers.
+        # napari routes every layer-list deletion (Delete/Backspace key and the
+        # viewer's trash button) through LayerList.remove_selected(). Bruce owns
+        # every layer in the viewer and reuses them across images, so we wrap
+        # that method to veto removal whenever a managed layer is selected.
+        layers = self.viewer.layers
+        protected = {layer for layer, _ in self._iter_control_specs()}
+        original_remove_selected = layers.remove_selected
+
+        def guarded_remove_selected():
+            if protected & set(layers.selection):
+                self.viewer.status = "These layers can't be deleted."
+                return
+            original_remove_selected()
+
+        layers.remove_selected = guarded_remove_selected
+
+    def _remove_layer_buttons(self):
+        # Hide the new-layer and delete buttons above the layer list. Bruce
+        # manages a fixed set of layers, so the user should never add a new
+        # Points/Shapes/Labels layer or delete an existing one.
+        button_frame = next(
+            (
+                w
+                for w in QApplication.instance().allWidgets()
+                if type(w).__name__ == "QtLayerButtons"
+            ),
+            None,
+        )
+        if button_frame is None:
+            return
+
+        for attr in (
+            "newPointsButton",
+            "newShapesButton",
+            "newLabelsButton",
+            "deleteButton",
+        ):
+            button = getattr(button_frame, attr, None)
+            if button is not None:
+                button.hide()
 
     def closeEvent(self, event):
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import os
+import re
 import math
 import pickle
 import tifffile
@@ -764,6 +765,38 @@ class InvalidImageError(Exception):
     pass
 
 
+def _extract_focus_position_z(ome_xml: str) -> float | None:
+    """Extract the absolute Z (focus) stage position from Zeiss original metadata.
+
+    Bio-Formats does not map the ZVI focus position into the OME plane PositionZ
+    (it stays None); it survives only as a 'Focus Position 0' key/value pair in the
+    original-metadata annotations preserved in the OME-XML.
+
+    Args:
+      ome_xml (str): raw OME-XML metadata string from the OME-TIFF.
+
+    Returns:
+      float | None: channel-0 focus position in micrometres, or None when the key is
+        absent (e.g. single-channel images).
+    """
+
+    match = re.search(
+        r"<Key>\s*Focus Position 0\s*</Key>\s*<Value>(.*?)</Value>", ome_xml, re.S
+    )
+
+    if match is None:
+
+        return None
+
+    try:
+
+        return float(match.group(1).strip())
+
+    except ValueError:
+
+        return None
+
+
 def load_ome_tiff(file: str | Path) -> tuple:
     """Load OME-TIFF file derived from PALM .zvi file.
 
@@ -786,8 +819,8 @@ def load_ome_tiff(file: str | Path) -> tuple:
         raise InvalidImageError("Input file is not a multi-channel image.")
 
     # Process metadata
-    ome = tifffile.TiffFile(file).ome_metadata
-    ome = ome_types.from_xml(str(ome))
+    ome_xml = str(tifffile.TiffFile(file).ome_metadata)
+    ome = ome_types.from_xml(ome_xml)
 
     metadata = {"img_nm": Path(ome.images[0].name).stem}
 
@@ -815,6 +848,7 @@ def load_ome_tiff(file: str | Path) -> tuple:
         "physical_size_y": pixels.physical_size_y,
         "position_x": stage_pos[0]["position_x"],
         "position_y": stage_pos[0]["position_y"],
+        "position_z": _extract_focus_position_z(ome_xml),
         "px_area_um2": pixels.physical_size_x * pixels.physical_size_y,
     }
 
@@ -1120,6 +1154,10 @@ def _format_elem_cnt(
     area: float,
     comment: str,
     objective: str,
+    elem_type: str = "Freehand",
+    thickness: str = "2",
+    cutshot: str = "0,0",
+    z: str = "-",
 ) -> pd.DataFrame:
     """Format element contours for PALM RoboSoftware.
 
@@ -1132,6 +1170,10 @@ def _format_elem_cnt(
       area (float): element area in µm2.
       comment (str): element comment.
       objective (str): objective used for image acquisition.
+      elem_type (str): PALMRobo element type, e.g. "Freehand" or "Text".
+      thickness (str): element line thickness.
+      cutshot (str): element CutShot value.
+      z (str): element Z value.
 
     Returns:
       pandas.DataFrame: element-specific DataFrame matching PALM RoboSoftware format.
@@ -1142,14 +1184,14 @@ def _format_elem_cnt(
 
     header = pd.DataFrame(
         {
-            "Type": ["", "Freehand"],
+            "Type": ["", elem_type],
             "Color": ["", color],
-            "Thickness": ["", "2"],
+            "Thickness": ["", thickness],
             "No": ["", str(id)],
             "Laser function": ["", laser_fun],
-            "CutShot": ["", "0,0"],
+            "CutShot": ["", cutshot],
             "Area": ["", area],
-            "Z": ["", "-"],
+            "Z": ["", z],
             "Well": ["", destination],
             "Objective": ["", objective],
             "Comment": ["", comment],
@@ -1379,7 +1421,43 @@ MICROMETER
 Elements :\n
 """
 
-    objective = f"{int(metadata_dict['objectives']['nominal_magnification'])}X"
+    magnification = int(metadata_dict["objectives"]["nominal_magnification"])
+    objective = f"{magnification}X"
+
+    # Z (focus) stage position, shared by every element in the list (one focus
+    # plane per image). PALMRobo stores it as integer µm; "-" when the source
+    # .zvi carried no absolute Focus Position (e.g. single-channel cuts).
+    position_z = metadata_dict["image"].get("position_z")
+    z = str(round(position_z)) if position_z is not None else "-"
+
+    # Image-center Text marker, shared by every list (only the "No" varies). A
+    # PALMRobo Text element is a 2-point element: the two diagonal corners of a
+    # fixed-size square centred on the marker, whose side scales inversely with
+    # magnification (≈ 600 / magnification µm: 30 µm at 20X, 60 µm at 10X — matches
+    # every Text marker observed in PALMRobo-exported lists). Build it as that
+    # square centred on the image centre, in PALM stage coordinates.
+    center_palm = _scale_elem_cnt(
+        elem_cnt=np.array(
+            [
+                [
+                    metadata_dict["image"]["size_x"] / 2,
+                    metadata_dict["image"]["size_y"] / 2,
+                ]
+            ]
+        ),
+        metadata_dict=metadata_dict,
+        to="PALM",
+    )[0]
+    half_side = (600 / magnification) / 2
+    center_cnt = np.round(
+        np.array(
+            [
+                [center_palm[0] - half_side, center_palm[1] - half_side],
+                [center_palm[0] + half_side, center_palm[1] + half_side],
+            ]
+        ),
+        1,
+    )
 
     rois_collect = [r for r in records if r.collected]
     rois_omit = [r for r in records if not r.collected]
@@ -1415,8 +1493,30 @@ Elements :\n
                     area=r.area,
                     comment=r.comment,
                     objective=objective,
+                    z=z,
                 )
             )
+
+        # Text marker at the image center, written last in every list as a
+        # positional reference for the field of view the ROIs were derived from.
+        # Its "No" follows the ROIs (max ROI No + 1) so it never collides.
+        center_no = max((r.overall_id for r in recs), default=0) + 1
+        res.append(
+            _format_elem_cnt(
+                elem_cnt=center_cnt,
+                id=center_no,
+                color="red",
+                laser_fun="-",
+                destination="manual",
+                area=0.0,
+                comment=f"{metadata_dict['img_nm']} - center",
+                objective=objective,
+                elem_type="Text",
+                thickness="1",
+                cutshot="0,0",
+                z=z,
+            )
+        )
 
         res = pd.concat(res)
 
@@ -1430,21 +1530,29 @@ Elements :\n
 # %% merge_elem_lists() ----
 
 
-def _read_elem_txt(file: str | Path, img_nm: str, comment_sep: str) -> list[dict]:
+def _read_elem_txt(
+    file: str | Path, img_nm: str, comment_sep: str, include_text: bool = True
+) -> list[dict]:
     """Parse one PALMRobo element-list .txt into lean per-element dicts.
 
     Contours are read as-is (already in absolute PALM stage coordinates) and each
-    element's Comment is prefixed with the source image name so its origin stays
-    traceable once lists from several FOVs are combined.
+    cut element's Comment is prefixed with the source image name so its origin
+    stays traceable once lists from several FOVs are combined. The image-center
+    "Text" marker is kept verbatim (its Comment already names the FOV) so it can
+    be re-emitted as a Text element rather than a cut region.
 
     Args:
       file (str | Path): path to a PALMRobo element-list .txt file.
-      img_nm (str): source image name, prefixed to every Comment.
+      img_nm (str): source image name, prefixed to every cut element's Comment.
       comment_sep (str): separator inserted between img_nm and the original Comment.
+      include_text (bool): keep "Text" marker elements. Set False when reading a
+        file whose Text marker has already been captured from a sibling file, to
+        avoid emitting the same center marker twice.
 
     Returns:
-      list[dict]: one dict per element with keys 'cnt', 'color', 'laser_function',
-        'tube_id', 'area', 'comment', 'objective'.
+      list[dict]: one dict per element with keys 'cnt', 'type', 'color',
+        'thickness', 'laser_function', 'cutshot', 'area', 'z', 'tube_id',
+        'comment', 'objective', 'no'.
     """
 
     dfs = _txt_to_elem_dfs(file=str(file))
@@ -1453,17 +1561,42 @@ def _read_elem_txt(file: str | Path, img_nm: str, comment_sep: str) -> list[dict
     for df in dfs:
 
         meta = _get_elem_metadata(elem_df=df)
+
+        is_text = meta["Type"] == "Text"
+
+        if is_text and not include_text:
+            continue
+
         cnt = _get_elem_cnt(elem_df=df)
+
+        # The center marker's Comment already names its FOV, so leave it as-is;
+        # prefix only cut elements to keep their origin traceable when combined.
+        comment = (
+            meta["Comment"]
+            if is_text
+            else f"{img_nm}{comment_sep}{meta['Comment']}"
+        )
 
         elems.append(
             {
                 "cnt": cnt,
+                "type": meta["Type"],
                 "color": meta["Color"],
+                "thickness": meta["Thickness"],
                 "laser_function": meta["Laser function"],
-                "tube_id": meta["Well"],
+                "cutshot": meta["CutShot"],
                 "area": meta["Area"],
-                "comment": f"{img_nm}{comment_sep}{meta['Comment']}",
+                "z": meta["Z"],
+                "tube_id": meta["Well"],
+                "comment": comment,
                 "objective": meta["Objective"],
+                "no": int(meta["No"]),
+                # Source FOV and the original (un-prefixed) population label, kept
+                # for cross-image overlap detection (see _find_elem_overlaps). The
+                # label is the part before " #<k> - COLLECT/OMIT"; not meaningful
+                # for the Text center marker, which overlap detection skips.
+                "img_nm": img_nm,
+                "label": meta["Comment"].split(" #")[0],
             }
         )
 
@@ -1506,6 +1639,10 @@ Elements :\n
             area=e["area"],
             comment=e["comment"],
             objective=e["objective"],
+            elem_type=e["type"],
+            thickness=e["thickness"],
+            cutshot=e["cutshot"],
+            z=e["z"],
         )
         for e in elems
     ]
@@ -1517,9 +1654,183 @@ Elements :\n
     return header + res + "\n\n\n"
 
 
+def _parse_population_status(label: str) -> dict[str, str]:
+    """Parse a population label into a {channel_name: status} dict.
+
+    e.g. "TH-pos/pSyn-neg" -> {"TH": "pos", "pSyn": "neg"}. The status is the
+    suffix after the final "-" of each "/"-separated token, so channel names
+    containing hyphens are tolerated.
+    """
+
+    status = {}
+    for token in label.split("/"):
+        name, sep, st = token.rpartition("-")
+        if sep:
+            status[name] = st
+    return status
+
+
+def _poly_overlap_pct(
+    cnt_a: np.ndarray, cnt_b: np.ndarray, resolution: float
+) -> tuple[float, float, float]:
+    """Overlap between two polygons given in PALM stage coordinates (µm).
+
+    The two contours are rasterised onto a shared grid (so arbitrary, possibly
+    non-convex cell outlines are handled) and their intersection is measured.
+
+    Args:
+      cnt_a, cnt_b (numpy.ndarray): (N, 2) polygon vertices in µm.
+      resolution (float): rasterisation grid size in µm per pixel.
+
+    Returns:
+      tuple: (pct_of_a, pct_of_b, intersection_um2). The percentages are the
+        intersection area as a fraction of each polygon's own area. Returns
+        (0.0, 0.0, 0.0) when the polygons do not overlap.
+    """
+
+    import cv2
+
+    ax0, ay0 = cnt_a.min(axis=0)
+    ax1, ay1 = cnt_a.max(axis=0)
+    bx0, by0 = cnt_b.min(axis=0)
+    bx1, by1 = cnt_b.max(axis=0)
+
+    # Bounding-box reject: no pixel overlap is possible, skip the rasterisation.
+    if ax1 < bx0 or bx1 < ax0 or ay1 < by0 or by1 < ay0:
+        return 0.0, 0.0, 0.0
+
+    minx, miny = min(ax0, bx0), min(ay0, by0)
+    maxx, maxy = max(ax1, bx1), max(ay1, by1)
+    w = int(np.ceil((maxx - minx) / resolution)) + 2
+    h = int(np.ceil((maxy - miny) / resolution)) + 2
+
+    def raster(cnt: np.ndarray) -> np.ndarray:
+        pts = np.round((cnt - (minx, miny)) / resolution).astype(np.int32)
+        m = np.zeros((h, w), dtype=np.uint8)
+        cv2.fillPoly(m, [pts], 1)
+        return m
+
+    msk_a = raster(cnt_a)
+    msk_b = raster(cnt_b)
+
+    inter = int(np.count_nonzero(msk_a & msk_b))
+    if inter == 0:
+        return 0.0, 0.0, 0.0
+
+    area_a = int(np.count_nonzero(msk_a)) or 1
+    area_b = int(np.count_nonzero(msk_b)) or 1
+
+    return (
+        100 * inter / area_a,
+        100 * inter / area_b,
+        inter * resolution * resolution,
+    )
+
+
+def _find_elem_overlaps(
+    elems: list[dict], min_pct: float = 1.0, resolution: float = 0.5
+) -> list[dict]:
+    """Find cut elements from DIFFERENT images that overlap spatially.
+
+    When several .zvi FOVs partially overlap, a cell can be captured in more than
+    one per-image element list and end up duplicated in the merged list. This
+    compares every pair of cut elements (Text center markers excluded) that come
+    from distinct source images and reports those whose contours overlap.
+
+    Args:
+      elems (list[dict]): merged per-element dicts (carrying 'no', 'img_nm',
+        'label', 'cnt', 'type'), already globally renumbered.
+      min_pct (float): report a pair only when the overlap reaches this
+        percentage of at least one of the two elements (filters rasterisation
+        boundary noise between merely adjacent cells).
+      resolution (float): rasterisation grid size in µm (see _poly_overlap_pct).
+
+    Returns:
+      list[dict]: one record per overlapping pair, each with 'a'/'b' (no, img_nm,
+        label, status), 'pct_a'/'pct_b', 'inter_um2', 'same_status'
+        (channel -> bool) and 'same_population' (bool).
+    """
+
+    cuts = [e for e in elems if e["type"] != "Text"]
+    overlaps = []
+
+    for i in range(len(cuts)):
+        a = cuts[i]
+        for j in range(i + 1, len(cuts)):
+            b = cuts[j]
+
+            # Within-image overlaps are resolved by bruce's own cross-channel
+            # analysis; only cross-image pairs signal overlapping FOVs.
+            if a["img_nm"] == b["img_nm"]:
+                continue
+
+            pct_a, pct_b, inter = _poly_overlap_pct(a["cnt"], b["cnt"], resolution)
+            if max(pct_a, pct_b) < min_pct:
+                continue
+
+            status_a = _parse_population_status(a["label"])
+            status_b = _parse_population_status(b["label"])
+            channels = [c for c in status_a if c in status_b]
+
+            overlaps.append(
+                {
+                    "a": {"no": a["no"], "img_nm": a["img_nm"],
+                          "label": a["label"], "status": status_a},
+                    "b": {"no": b["no"], "img_nm": b["img_nm"],
+                          "label": b["label"], "status": status_b},
+                    "pct_a": pct_a,
+                    "pct_b": pct_b,
+                    "inter_um2": inter,
+                    "same_status": {c: status_a[c] == status_b[c] for c in channels},
+                    "same_population": a["label"] == b["label"],
+                }
+            )
+
+    return overlaps
+
+
+def format_overlap_warnings(overlaps: list[dict]) -> str:
+    """Render overlap records from merge_elem_lists into a readable warning.
+
+    Returns an empty string when there are no overlaps.
+    """
+
+    if not overlaps:
+        return ""
+
+    lines = [
+        f"{len(overlaps)} overlapping element pair(s) detected across images.",
+        "Some fields of view may partially overlap, so the same cell may appear in "
+        "more than one element list (and be collected twice if both are kept). "
+        "Review before importing into PALMRobo:",
+        "",
+    ]
+
+    for o in overlaps:
+        a, b = o["a"], o["b"]
+        lines.append(
+            f"• #{a['no']} ({a['img_nm']}: {a['label']})  ↔  "
+            f"#{b['no']} ({b['img_nm']}: {b['label']})"
+        )
+        lines.append(
+            f"    overlap: {o['pct_a']:.0f}% of #{a['no']}, "
+            f"{o['pct_b']:.0f}% of #{b['no']}  ({o['inter_um2']:.0f} µm²)"
+        )
+
+        bits = []
+        for ch, same in o["same_status"].items():
+            rel = "=" if same else "≠"
+            bits.append(f"{ch}: {a['status'][ch]} {rel} {b['status'][ch]}")
+        if bits:
+            tag = "same population" if o["same_population"] else "different population"
+            lines.append(f"    status: {'; '.join(bits)}  ({tag})")
+
+    return "\n".join(lines)
+
+
 def merge_elem_lists(
     folder_paths: Sequence[str | Path], comment_sep: str = " | "
-) -> dict:
+) -> tuple[dict, list[dict]]:
     """Combine the PALMRobo element lists produced by several bruce runs.
 
     Each bruce run analyses one field of view and writes its element list(s) into
@@ -1539,8 +1850,11 @@ def merge_elem_lists(
         original Comment.
 
     Returns:
-      dict: PALMRobo .txt strings keyed "collect" (and "omit"/"all" when any
-        source folder contained omitted elements), mirroring single-run output.
+      tuple: (lists, overlaps) where 'lists' is a dict of PALMRobo .txt strings
+        keyed "collect" (and "omit"/"all" when any source folder contained
+        omitted elements), mirroring single-run output; and 'overlaps' is the
+        list of cross-image overlapping cut-element pairs from
+        _find_elem_overlaps() (empty when none), to be surfaced as a warning.
 
     Raises:
       FileNotFoundError: a folder has no elem_list_collect.txt.
@@ -1568,13 +1882,20 @@ def merge_elem_lists(
 
         collected.extend(_read_elem_txt(collect_file, img_nm, comment_sep))
 
+        # The center marker is written to every per-FOV list, so read it only
+        # from the collect file to avoid duplicating it across the merged groups.
         if omit_file.exists():
-            omitted.extend(_read_elem_txt(omit_file, img_nm, comment_sep))
+            omitted.extend(
+                _read_elem_txt(omit_file, img_nm, comment_sep, include_text=False)
+            )
 
-    if not collected:
+    if not any(e["type"] != "Text" for e in collected):
         raise ValueError("No collected elements found in the selected folders.")
 
-    # Global element-list numbering: collected 1..N, omitted continue at N+1.
+    # Global, unique element-list numbering across the merged file: the collected
+    # stream (each FOV's center marker followed by its collected cut elements, in
+    # order) is numbered 1..N; omitted cut elements continue at N+1. Numbering all
+    # elements together keeps every "No" unique across the merged list.
     for i, e in enumerate(collected, start=1):
         e["no"] = i
     for j, e in enumerate(omitted, start=len(collected) + 1):
@@ -1589,7 +1910,15 @@ def merge_elem_lists(
             "all": collected + omitted,
         }
 
-    return {nm: _emit_elem_txt(elems) for nm, elems in groups.items()}
+    # Flag cut elements from different FOVs whose contours overlap: with partially
+    # overlapping images the same cell may be captured in more than one per-image
+    # list. All elements are checked (collected and omitted) so duplicates are
+    # surfaced regardless of collect/omit choice.
+    overlaps = _find_elem_overlaps(collected + omitted)
+
+    lists = {nm: _emit_elem_txt(elems) for nm, elems in groups.items()}
+
+    return lists, overlaps
 
 
 # %% choose_stardist_n_tiles() ----
@@ -1691,8 +2020,8 @@ def pickle_data(data: Any, filename: str | Path) -> None:
 
 
 def zvi_to_dict(
-    in_dir_path: str,
-    out_dir_path: str,
+    in_dir_path: str | Path,
+    out_dir_path: str | Path,
     low_pct_dict: dict,
     high_pct_dict: dict,
     ome_tiff: bool = False,
@@ -1701,8 +2030,8 @@ def zvi_to_dict(
     """Store 2-channel image .zvi files to .pkl.
 
     Args:
-      in_dir_path (str): path to input directory containing .zvi files to process.
-      out_dir_path (str): path to output directory.
+      in_dir_path (str | Path): path to input directory containing .zvi files to process.
+      out_dir_path (str | Path): path to output directory.
       img (numpy.ndarray): image to normalize.
       low_pct (float): lower percentile to clip for robust normalization of images.
       high_pct (float): upper percentile to clip for robust normalization of images.

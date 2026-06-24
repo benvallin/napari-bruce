@@ -356,12 +356,33 @@ class MergeElemLists(QDialog):
         base = f"{prefix}_merged_elem_list" if prefix else "merged_elem_list"
 
         try:
-            merged = workflow.merge_elem_lists(folder_paths=folders)
+            merged, overlaps = workflow.merge_elem_lists(folder_paths=folders)
         except Exception as e:
             QMessageBox.critical(
                 self, "Merge failed", f"{type(e).__name__}: {e}"
             )
             return
+
+        # Cut elements from different images whose contours overlap signal
+        # partially overlapping FOVs → the same tissue could be captured twice.
+        # Require explicit confirmation before writing anything; abort (leaving
+        # Merge enabled) if the user declines so they can revise the selection.
+        if overlaps:
+            warning = workflow.format_overlap_warnings(overlaps)
+            print(warning + "\n")
+            proceed = QMessageBox.warning(
+                self,
+                "Overlapping elements detected",
+                f"{warning}\n\nWrite the merged element list(s) anyway?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if proceed != QMessageBox.Yes:
+                self.status_label.setText(
+                    f"✘ Merge cancelled: {len(overlaps)} overlapping element "
+                    "pair(s) across images. Adjust the selection and retry."
+                )
+                return
 
         # Always suffix the group name (collect / omit / all), mirroring single-run
         # output (elem_list_collect.txt, ...), so a collect-only merge still gets the
@@ -387,10 +408,17 @@ class MergeElemLists(QDialog):
         paths = "\n".join(str(p) for p in written)
         print(f"Merged {len(folders)} element list(s) into:\n{paths}\n")
 
-        # Report completion in-window rather than via a pop-up dialog.
+        # Report completion in-window rather than via a pop-up dialog. If the user
+        # confirmed past an overlap warning, note that it was written anyway.
         file_names = "\n".join(names[nm] for nm in merged)
+        overlap_note = (
+            f"\n\n⚠ Written despite {len(overlaps)} overlapping element pair(s) "
+            "across images."
+            if overlaps
+            else ""
+        )
         self.status_label.setText(
-            f"✔ Merged {len(folders)} experiments into:\n{file_names}"
+            f"✔ Merged {len(folders)} experiments into:\n{file_names}{overlap_note}"
         )
 
         # Stay open so the user can run further merges without relaunching, but
