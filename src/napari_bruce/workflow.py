@@ -1256,7 +1256,7 @@ class ElemRoi:
     laser_function: str
     tube_id: str
     comment: str  # "<label> #<k> - COLLECT/OMIT"
-    overall_id: int = -1  # element-list ID; assigned globally after gathering
+    overall_id: int = -1  # cross-group ordering index (collected 1..N, omitted N+1..); assigned globally after gathering
 
 
 def make_elem_metadata(
@@ -1298,7 +1298,9 @@ def make_elem_metadata(
           'channel', 'status', 'label' and a 'rois' list of
           {'base_id', 'ranked_id', 'reranked_id', 'overall_id', 'collected'}
           records. 'reranked_id' is the per-population number shown in the element
-          .txt Comment column; 'overall_id' is the global element-list "No" column.
+          .txt Comment column; 'overall_id' is the cross-group ordering index used
+          internally (collected 1..N_collect, omitted N_collect+1..N_total), not
+          necessarily equal to the "No" column written to the .txt file.
     """
 
     ch_nm = (metadata_dict["channels"][0]["name"], metadata_dict["channels"][1]["name"])
@@ -1477,7 +1479,7 @@ Elements :\n
 
         res = []
 
-        for r in recs:
+        for i, r in enumerate(recs, start=1):
 
             cnt = _scale_elem_cnt(
                 elem_cnt=r.contour, metadata_dict=metadata_dict, to="PALM"
@@ -1486,7 +1488,7 @@ Elements :\n
             res.append(
                 _format_elem_cnt(
                     elem_cnt=cnt,
-                    id=r.overall_id,
+                    id=i,
                     color=r.color,
                     laser_fun=r.laser_function,
                     destination=r.tube_id,
@@ -1499,8 +1501,7 @@ Elements :\n
 
         # Text marker at the image center, written last in every list as a
         # positional reference for the field of view the ROIs were derived from.
-        # Its "No" follows the ROIs (max ROI No + 1) so it never collides.
-        center_no = max((r.overall_id for r in recs), default=0) + 1
+        center_no = len(recs) + 1
         res.append(
             _format_elem_cnt(
                 elem_cnt=center_cnt,
@@ -1509,7 +1510,7 @@ Elements :\n
                 laser_fun="-",
                 destination="manual",
                 area=0.0,
-                comment=f"{metadata_dict['img_nm']} - center",
+                comment=f"{metadata_dict['img_nm']} - FOV center",
                 objective=objective,
                 elem_type="Text",
                 thickness="1",
@@ -1531,7 +1532,7 @@ Elements :\n
 
 
 def _read_elem_txt(
-    file: str | Path, img_nm: str, comment_sep: str, include_text: bool = True
+    file: str | Path, img_nm: str, comment_sep: str
 ) -> list[dict]:
     """Parse one PALMRobo element-list .txt into lean per-element dicts.
 
@@ -1545,9 +1546,6 @@ def _read_elem_txt(
       file (str | Path): path to a PALMRobo element-list .txt file.
       img_nm (str): source image name, prefixed to every cut element's Comment.
       comment_sep (str): separator inserted between img_nm and the original Comment.
-      include_text (bool): keep "Text" marker elements. Set False when reading a
-        file whose Text marker has already been captured from a sibling file, to
-        avoid emitting the same center marker twice.
 
     Returns:
       list[dict]: one dict per element with keys 'cnt', 'type', 'color',
@@ -1564,9 +1562,6 @@ def _read_elem_txt(
 
         is_text = meta["Type"] == "Text"
 
-        if is_text and not include_text:
-            continue
-
         cnt = _get_elem_cnt(elem_df=df)
 
         # The center marker's Comment already names its FOV, so leave it as-is;
@@ -1577,6 +1572,11 @@ def _read_elem_txt(
             else f"{img_nm}{comment_sep}{meta['Comment']}"
         )
 
+        # Z may be parsed as float64 by pandas when all values in the column are
+        # numeric; normalise back to integer string to match the source format.
+        z_val = meta["Z"]
+        z = str(int(z_val)) if isinstance(z_val, float) and not math.isnan(z_val) else str(z_val)
+
         elems.append(
             {
                 "cnt": cnt,
@@ -1586,7 +1586,7 @@ def _read_elem_txt(
                 "laser_function": meta["Laser function"],
                 "cutshot": meta["CutShot"],
                 "area": meta["Area"],
-                "z": meta["Z"],
+                "z": z,
                 "tube_id": meta["Well"],
                 "comment": comment,
                 "objective": meta["Objective"],
@@ -1774,10 +1774,20 @@ def _find_elem_overlaps(
 
             overlaps.append(
                 {
-                    "a": {"no": a["no"], "img_nm": a["img_nm"],
-                          "label": a["label"], "status": status_a},
-                    "b": {"no": b["no"], "img_nm": b["img_nm"],
-                          "label": b["label"], "status": status_b},
+                    "a": {
+                        "no": a["no"],
+                        "img_nm": a["img_nm"],
+                        "label": a["label"],
+                        "collect_str": "COLLECT" if "- COLLECT" in a["comment"] else "OMIT",
+                        "status": status_a,
+                    },
+                    "b": {
+                        "no": b["no"],
+                        "img_nm": b["img_nm"],
+                        "label": b["label"],
+                        "collect_str": "COLLECT" if "- COLLECT" in b["comment"] else "OMIT",
+                        "status": status_b,
+                    },
                     "pct_a": pct_a,
                     "pct_b": pct_b,
                     "inter_um2": inter,
@@ -1798,38 +1808,23 @@ def format_overlap_warnings(overlaps: list[dict]) -> str:
     if not overlaps:
         return ""
 
-    lines = [
-        f"{len(overlaps)} overlapping element pair(s) detected across images.",
-        "Some fields of view may partially overlap, so the same cell may appear in "
-        "more than one element list (and be collected twice if both are kept). "
-        "Review before importing into PALMRobo:",
-        "",
-    ]
+    lines = [f"{len(overlaps)} overlapping element pair(s) detected across images."]
 
-    for o in overlaps:
+    for i, o in enumerate(overlaps, start=1):
         a, b = o["a"], o["b"]
-        lines.append(
-            f"• #{a['no']} ({a['img_nm']}: {a['label']})  ↔  "
-            f"#{b['no']} ({b['img_nm']}: {b['label']})"
-        )
-        lines.append(
-            f"    overlap: {o['pct_a']:.0f}% of #{a['no']}, "
-            f"{o['pct_b']:.0f}% of #{b['no']}  ({o['inter_um2']:.0f} µm²)"
-        )
-
-        bits = []
-        for ch, same in o["same_status"].items():
-            rel = "=" if same else "≠"
-            bits.append(f"{ch}: {a['status'][ch]} {rel} {b['status'][ch]}")
-        if bits:
-            tag = "same population" if o["same_population"] else "different population"
-            lines.append(f"    status: {'; '.join(bits)}  ({tag})")
+        pop_tag = "same population" if o["same_population"] else "different population"
+        lines.append(f"\nPair {i}:")
+        lines.append(f"  {o['inter_um2']:.0f} µm² overlap - {pop_tag}")
+        lines.append(f"  #{a['no']} • {a['img_nm']} | {a['label']} | {a['collect_str']}")
+        lines.append(f"  #{b['no']} • {b['img_nm']} | {b['label']} | {b['collect_str']}")
 
     return "\n".join(lines)
 
 
 def merge_elem_lists(
-    folder_paths: Sequence[str | Path], comment_sep: str = " | "
+    folder_paths: Sequence[str | Path],
+    comment_sep: str = " | ",
+    exclude_nos: set[int] | None = None,
 ) -> tuple[dict, list[dict]]:
     """Combine the PALMRobo element lists produced by several bruce runs.
 
@@ -1848,6 +1843,9 @@ def merge_elem_lists(
         elem_list_collect.txt (and optionally an elem_list_omit.txt).
       comment_sep (str): separator inserted between the image name and the
         original Comment.
+      exclude_nos (set[int] | None): "all"-list element numbers to drop from the
+        output.  Overlap detection always runs on the full stream; exclusions are
+        applied after and the remaining elements are renumbered.
 
     Returns:
       tuple: (lists, overlaps) where 'lists' is a dict of PALMRobo .txt strings
@@ -1858,7 +1856,8 @@ def merge_elem_lists(
 
     Raises:
       FileNotFoundError: a folder has no elem_list_collect.txt.
-      ValueError: no folders given, or no collected elements across all folders.
+      ValueError: no folders given; no collected elements across all folders; or
+        exclude_nos removed all collected elements.
     """
 
     if not folder_paths:
@@ -1882,39 +1881,57 @@ def merge_elem_lists(
 
         collected.extend(_read_elem_txt(collect_file, img_nm, comment_sep))
 
-        # The center marker is written to every per-FOV list, so read it only
-        # from the collect file to avoid duplicating it across the merged groups.
         if omit_file.exists():
-            omitted.extend(
-                _read_elem_txt(omit_file, img_nm, comment_sep, include_text=False)
-            )
+            omitted.extend(_read_elem_txt(omit_file, img_nm, comment_sep))
 
     if not any(e["type"] != "Text" for e in collected):
         raise ValueError("No collected elements found in the selected folders.")
 
-    # Global, unique element-list numbering across the merged file: the collected
-    # stream (each FOV's center marker followed by its collected cut elements, in
-    # order) is numbered 1..N; omitted cut elements continue at N+1. Numbering all
-    # elements together keeps every "No" unique across the merged list.
+    # Number collected elements 1..N_collect in-place (used by "collect" and "all").
     for i, e in enumerate(collected, start=1):
         e["no"] = i
-    for j, e in enumerate(omitted, start=len(collected) + 1):
+
+    # For "all": omitted ROI elements (no Text — those are already in collected)
+    # continue at N_collect+1 to keep every "No" unique across the merged list.
+    omitted_no_text = [e for e in omitted if e["type"] != "Text"]
+    for j, e in enumerate(omitted_no_text, start=len(collected) + 1):
         e["no"] = j
+
+    # Overlap detection always runs on the full stream so the caller receives a
+    # complete picture regardless of any exclusions.
+    overlaps = _find_elem_overlaps(collected + omitted_no_text)
+
+    # Apply caller-requested exclusions.  Python object identity is used to match
+    # elements across the three lists safely (Text elements in `omitted` carry
+    # their original file nos which could coincide with "all"-list nos).
+    if exclude_nos:
+        excluded_ids = {
+            id(e) for e in (collected + omitted_no_text) if e["no"] in exclude_nos
+        }
+        collected = [e for e in collected if id(e) not in excluded_ids]
+        omitted_no_text = [e for e in omitted_no_text if id(e) not in excluded_ids]
+        omitted = [e for e in omitted if id(e) not in excluded_ids]
+
+        if not any(e["type"] != "Text" for e in collected):
+            raise ValueError("All collected elements were excluded.")
+
+        # Re-number the filtered streams.
+        for i, e in enumerate(collected, start=1):
+            e["no"] = i
+        for j, e in enumerate(omitted_no_text, start=len(collected) + 1):
+            e["no"] = j
+
+    # For "omit": renumber from 1, including per-FOV Text markers.
+    omitted_renumbered = [{**e, "no": k} for k, e in enumerate(omitted, start=1)]
 
     if not omitted:
         groups = {"collect": collected}
     else:
         groups = {
             "collect": collected,
-            "omit": omitted,
-            "all": collected + omitted,
+            "omit": omitted_renumbered,
+            "all": collected + omitted_no_text,
         }
-
-    # Flag cut elements from different FOVs whose contours overlap: with partially
-    # overlapping images the same cell may be captured in more than one per-image
-    # list. All elements are checked (collected and omitted) so duplicates are
-    # surfaced regardless of collect/omit choice.
-    overlaps = _find_elem_overlaps(collected + omitted)
 
     lists = {nm: _emit_elem_txt(elems) for nm, elems in groups.items()}
 

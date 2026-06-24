@@ -2,11 +2,13 @@
 
 from pathlib import Path
 
+from qtpy.QtCore import Qt
 from qtpy.QtGui import QFont
 
 from qtpy.QtWidgets import (
     QApplication,
     QDialog,
+    QFrame,
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
@@ -40,6 +42,125 @@ def _list_mergeable_subfolders(parent: str | Path) -> list[Path]:
         for p in parent.iterdir()
         if p.is_dir() and (p / "elem_list_collect.txt").exists()
     )
+
+
+# %% OverlapResolutionDialog() ----
+
+
+class OverlapResolutionDialog(QDialog):
+    """Per-pair overlap review dialog shown before writing merged element lists.
+
+    Displays one group box per overlapping pair.  Each pair shows the overlap
+    statistics and one checkbox per element; unchecking an element marks it for
+    exclusion from the merged output.  Elements that appear in more than one pair
+    get a checkbox in each pair, kept in sync via blockSignals.
+    """
+
+    def __init__(self, overlaps: list[dict], parent=None):
+
+        super().__init__(parent)
+        self.setWindowTitle("Overlapping elements detected")
+        self.setMinimumSize(560, 400)
+
+        # keep[no] = True means the element is retained; False means excluded.
+        self._keep: dict[int, bool] = {}
+        # All QCheckBox widgets for each element no, for cross-pair syncing.
+        self._cbs_by_no: dict[int, list[QCheckBox]] = {}
+
+        # Collect all unique element nos upfront so _keep is fully populated
+        # before any checkbox signal fires.
+        for o in overlaps:
+            for side in ("a", "b"):
+                no = o[side]["no"]
+                if no not in self._keep:
+                    self._keep[no] = True
+                    self._cbs_by_no[no] = []
+
+        layout = QVBoxLayout(self)
+
+        intro = QLabel(
+            f"{len(overlaps)} overlapping element pair(s) detected across images.\n"
+            "Uncheck element(s) to be excluded from the merged output."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setSpacing(8)
+
+        for i, o in enumerate(overlaps, start=1):
+
+            a, b = o["a"], o["b"]
+
+            box = QGroupBox(f"Pair {i}")
+            box_layout = QVBoxLayout(box)
+
+            pop_tag = "same population" if o["same_population"] else "different population"
+            stats = QLabel(f"{o['inter_um2']:.0f} µm² overlap - {pop_tag}")
+            box_layout.addWidget(stats)
+
+            for side_key in ("a", "b"):
+                e = o[side_key]
+                no = e["no"]
+                cb = QCheckBox(
+                    f"#{no} • {e['img_nm']} | {e['label']} | {e['collect_str']}"
+                )
+                cb.setChecked(self._keep[no])
+                cb.toggled.connect(
+                    lambda checked, n=no: self._on_toggled(n, checked)
+                )
+                self._cbs_by_no[no].append(cb)
+                box_layout.addWidget(cb)
+
+            content_layout.addWidget(box)
+
+        content_layout.addStretch()
+        scroll.setWidget(content)
+        layout.addWidget(scroll, stretch=1)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        btn_cancel = QPushButton("Cancel")
+        btn_cancel.clicked.connect(self.reject)
+        btn_row.addWidget(btn_cancel)
+        btn_proceed = QPushButton("Proceed")
+        btn_proceed.setDefault(True)
+        btn_proceed.clicked.connect(self.accept)
+        btn_row.addWidget(btn_proceed)
+        layout.addLayout(btn_row)
+
+        self._apply_title_font()
+
+    def _on_toggled(self, no: int, checked: bool) -> None:
+        self._keep[no] = checked
+        # Sync every other checkbox for this element without retriggering signals.
+        for cb in self._cbs_by_no.get(no, []):
+            if cb.isChecked() != checked:
+                cb.blockSignals(True)
+                cb.setChecked(checked)
+                cb.blockSignals(False)
+
+    def _apply_title_font(self) -> None:
+        title_font = QFont()
+        title_font.setPointSize(13)
+        title_font.setBold(True)
+        content_font = QFont()
+        content_font.setPointSize(QApplication.font().pointSize())
+        content_font.setBold(False)
+        for box in self.findChildren(QGroupBox):
+            box.setFont(title_font)
+            for child in box.findChildren(QWidget):
+                child.setFont(content_font)
+
+    def excluded_nos(self) -> set[int]:
+        """Element nos the user chose to exclude (unchecked checkboxes)."""
+        return {no for no, keep in self._keep.items() if not keep}
 
 
 # %% MergeElemLists() ----
@@ -365,24 +486,30 @@ class MergeElemLists(QDialog):
 
         # Cut elements from different images whose contours overlap signal
         # partially overlapping FOVs → the same tissue could be captured twice.
-        # Require explicit confirmation before writing anything; abort (leaving
-        # Merge enabled) if the user declines so they can revise the selection.
+        # Show the overlap resolution dialog so the user can inspect each pair
+        # and choose which elements to keep before writing.
+        excluded: set[int] = set()
         if overlaps:
             warning = workflow.format_overlap_warnings(overlaps)
             print(warning + "\n")
-            proceed = QMessageBox.warning(
-                self,
-                "Overlapping elements detected",
-                f"{warning}\n\nWrite the merged element list(s) anyway?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            if proceed != QMessageBox.Yes:
+            resolution = OverlapResolutionDialog(overlaps, parent=self)
+            if resolution.exec_() != QDialog.Accepted:
                 self.status_label.setText(
                     f"✘ Merge cancelled: {len(overlaps)} overlapping element "
-                    "pair(s) across images. Adjust the selection and retry."
+                    "pair(s) across images."
                 )
                 return
+            excluded = resolution.excluded_nos()
+            if excluded:
+                try:
+                    merged, _ = workflow.merge_elem_lists(
+                        folder_paths=folders, exclude_nos=excluded
+                    )
+                except Exception as e:
+                    QMessageBox.critical(
+                        self, "Merge failed", f"{type(e).__name__}: {e}"
+                    )
+                    return
 
         # Always suffix the group name (collect / omit / all), mirroring single-run
         # output (elem_list_collect.txt, ...), so a collect-only merge still gets the
@@ -406,17 +533,29 @@ class MergeElemLists(QDialog):
             written.append(path)
 
         paths = "\n".join(str(p) for p in written)
-        print(f"Merged {len(folders)} element list(s) into:\n{paths}\n")
+        exclusion_note = (
+            f"{len(excluded)} element(s) excluded to resolve "
+            f"{len(overlaps)} overlapping pair(s).\n"
+            if overlaps and excluded
+            else ""
+        )
+        print(f"Merged {len(folders)} element list(s) into:\n{paths}\n{exclusion_note}")
 
         # Report completion in-window rather than via a pop-up dialog. If the user
         # confirmed past an overlap warning, note that it was written anyway.
         file_names = "\n".join(names[nm] for nm in merged)
-        overlap_note = (
-            f"\n\n⚠ Written despite {len(overlaps)} overlapping element pair(s) "
-            "across images."
-            if overlaps
-            else ""
-        )
+        if overlaps and excluded:
+            overlap_note = (
+                f"\n\n{len(excluded)} element(s) excluded to resolve "
+                f"{len(overlaps)} overlapping pair(s)."
+            )
+        elif overlaps:
+            overlap_note = (
+                f"\n\n⚠ {len(overlaps)} overlapping pair(s) detected; "
+                "all elements kept."
+            )
+        else:
+            overlap_note = ""
         self.status_label.setText(
             f"✔ Merged {len(folders)} experiments into:\n{file_names}{overlap_note}"
         )

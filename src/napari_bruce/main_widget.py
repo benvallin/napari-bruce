@@ -1083,6 +1083,16 @@ class PluginManager(QWidget):
         self.msg_icon.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         self.msg_icon.setVisible(False)
 
+        # Pre-render every message icon so Metal compiles the required shaders at
+        # startup rather than on first use (which would log "AGX: exceeded compiled
+        # variants footprint limit" if the first icon rendered is e.g. WARNING).
+        style = QApplication.style()
+        self._icon_pixmaps = {
+            level: style.standardIcon(level.value).pixmap(16, 16)
+            for level in MessageLevel
+            if level.value is not None
+        }
+
         self.msg_text = QLabel("")
         self.msg_text.setWordWrap(True)
         self.msg_text.setAlignment(Qt.AlignTop | Qt.AlignLeft)
@@ -1949,8 +1959,7 @@ class PluginManager(QWidget):
 
         else:
 
-            icon = QApplication.style().standardIcon(level.value)
-            self.msg_icon.setPixmap(icon.pixmap(16, 16))
+            self.msg_icon.setPixmap(self._icon_pixmaps[level])
             self.msg_icon.setVisible(True)
 
     def _show_busy_message(self, text: str):
@@ -2437,14 +2446,20 @@ class PluginManager(QWidget):
                 MessageLevel.WARNING,
             )
 
+            print(
+                f"Warning - {self.workflow.metadata['img_nm']}:\n"
+                "The element list is empty: no ROI selected for collection.\n"
+                "No results were written to file.\n"
+            )
+
             return
 
-        self.elem_list = workflow.make_elem_list(elem_records, self.workflow.metadata)
+        elem_list = workflow.make_elem_list(elem_records, self.workflow.metadata)
 
-        for k in self.elem_list.keys():
+        for k, txt in elem_list.items():
 
             with open(Path(out_dir_path, f"elem_list_{k}.txt"), "w") as f:
-                f.write(self.elem_list[k])
+                f.write(txt)
 
         # Record the old-ID -> new-element-ID / collect-omit correspondence so it
         # is persisted alongside the data.
