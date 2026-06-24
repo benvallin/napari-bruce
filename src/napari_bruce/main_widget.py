@@ -30,6 +30,7 @@ from qtpy.QtWidgets import (
     QFrame,
     QCheckBox,
     QDialogButtonBox,
+    QMessageBox,
 )
 from qtpy.QtCore import Signal, QObject, QThread, Qt
 from qtpy.QtGui import QColor
@@ -149,9 +150,14 @@ class UIComponents:
     btn_discard_additions: QPushButton | None
     btn_discard_deletions: QPushButton | None
     btn_apply_edits: QPushButton | None
+    btn_repredict: QPushButton | None
     btn_overlap_filter: QPushButton | None
     btn_edit_rois: QPushButton | None
     btn_save: QPushButton | None
+    box_low_pct_ch0: "ParamValueBox | None"
+    box_high_pct_ch0: "ParamValueBox | None"
+    box_low_pct_ch1: "ParamValueBox | None"
+    box_high_pct_ch1: "ParamValueBox | None"
     box_min_area_ch0: "ParamValueBox | None"
     box_min_area_ch1: "ParamValueBox | None"
     box_min_pct_ovl_ch0_by_ch1: "ParamValueBox | None"
@@ -171,9 +177,14 @@ class UIComponents:
         self.btn_discard_additions = None
         self.btn_discard_deletions = None
         self.btn_apply_edits = None
+        self.btn_repredict = None
         self.btn_overlap_filter = None
         self.btn_edit_rois = None
         self.btn_save = None
+        self.box_low_pct_ch0 = None
+        self.box_high_pct_ch0 = None
+        self.box_low_pct_ch1 = None
+        self.box_high_pct_ch1 = None
         self.box_min_area_ch0 = None
         self.box_min_area_ch1 = None
         self.box_min_pct_ovl_ch0_by_ch1 = None
@@ -459,6 +470,33 @@ class BaseWorker(QObject):
 
     def compute(self):
         raise NotImplementedError
+
+
+# %% NormalizationWorker() ----
+
+
+class NormalizationWorker(BaseWorker):
+
+    def __init__(self, data: dict, ch_names: dict, config: dict, ch_indices: list, parent=None):
+
+        super().__init__(parent)
+        self.data = data
+        self.ch_names = ch_names
+        self.config = config
+        self.ch_indices = ch_indices
+
+    def compute(self):
+
+        output = {}
+        for i in self.ch_indices:
+            ch_nm = self.ch_names[i]
+            norm_img = workflow.robust_normalization(
+                img=self.data[ch_nm]["img"],
+                low_pct=self.config["channels"][i]["low_pct"],
+                high_pct=self.config["channels"][i]["high_pct"],
+            )
+            output[i] = norm_img
+        return output
 
 
 # %% LoadModelWorker() ----
@@ -864,6 +902,11 @@ class PluginManager(QWidget):
         self._roi_id_base_text_size = 10
         self._roi_id_ref_zoom = None
 
+        # Last clip-pct values used for normalization, keyed by channel index.
+        # Used to detect which channels changed before a "Renormalize images" run.
+        self._last_norm_pcts = {}
+        self._pending_predict = False
+
         # Last collection summary printed to the terminal; re-prints only on change.
         self._last_collection_summary_print = None
 
@@ -986,6 +1029,7 @@ class PluginManager(QWidget):
         thread_attr_names = [
             "_load_model_worker_thread",
             "_load_worker_thread",
+            "_normalization_worker_thread",
             "_predict_filter_worker_thread",
             "_apply_edits_worker_thread",
             "_overlap_worker_thread",
@@ -1059,6 +1103,7 @@ class PluginManager(QWidget):
     def _on_worker_error(self, worker_name: str, error_msg: str):
 
         self.workflow.channel_mismatch = False
+        self._pending_predict = False
 
         self._set_message(
             f"{worker_name} failed with the following error:\n\n{error_msg}",
@@ -1551,7 +1596,10 @@ class PluginManager(QWidget):
         # Remove 'Select file' button from viewer
         self._destroy_ui_widgets(["btn_select"])
 
-        # Add 'Load images', 'Predict cells' and 'Clear' buttons to viewer
+        # Add clip-percentile boxes (positions 0-3) above the action buttons
+        self._add_clip_pct_boxes()
+
+        # Add 'Load images', 'Predict cells' and 'Clear' buttons below the boxes
         btn_load = QPushButton("Load images")
         btn_load.clicked.connect(self._on_load_clicked)
         self.ui.btn_load = btn_load
@@ -1564,16 +1612,14 @@ class PluginManager(QWidget):
         btn_clear.clicked.connect(lambda checked=False: self._on_clear_clicked())
         self.ui.btn_clear = btn_clear
 
-        for i, j in zip([0, 1, 2], [btn_load, btn_predict, btn_clear]):
+        for i, j in zip([4, 5, 6], [btn_load, btn_predict, btn_clear]):
 
             self.layout.insertWidget(i, j)
 
     def _set_loading_image_ui(self):
+        pass
 
-        # Remove 'Load images' button from viewer
-        self._destroy_ui_widgets(["btn_load"])
-
-    def _add_min_area_boxes(self):
+    def _add_min_area_boxes(self, insert_pos: int = 0):
 
         # Add 'min n pix' boxes to viewer
         box_min_area_ch0 = ParamValueBox(
@@ -1594,13 +1640,70 @@ class PluginManager(QWidget):
         box_min_area_ch1.valueChanged.connect(lambda x: self._on_min_area_changed(1, x))
         self.ui.box_min_area_ch1 = box_min_area_ch1
 
-        for i, j in zip([0, 1], [box_min_area_ch0, box_min_area_ch1]):
+        for i, j in zip([insert_pos, insert_pos + 1], [box_min_area_ch0, box_min_area_ch1]):
 
+            self.layout.insertWidget(i, j)
+
+    def _add_clip_pct_boxes(self):
+
+        box_low_pct_ch0 = ParamValueBox(
+            label="low % clip - ch0",
+            default=self.config["channels"][0]["low_pct"],
+            min_val=0.0,
+            max_val=100.0,
+            decimals=4,
+        )
+        box_low_pct_ch0.valueChanged.connect(
+            lambda x: self._on_clip_pct_changed(0, "low_pct", x)
+        )
+        self.ui.box_low_pct_ch0 = box_low_pct_ch0
+
+        box_high_pct_ch0 = ParamValueBox(
+            label="high % clip - ch0",
+            default=self.config["channels"][0]["high_pct"],
+            min_val=0.0,
+            max_val=100.0,
+            decimals=4,
+        )
+        box_high_pct_ch0.valueChanged.connect(
+            lambda x: self._on_clip_pct_changed(0, "high_pct", x)
+        )
+        self.ui.box_high_pct_ch0 = box_high_pct_ch0
+
+        box_low_pct_ch1 = ParamValueBox(
+            label="low % clip - ch1",
+            default=self.config["channels"][1]["low_pct"],
+            min_val=0.0,
+            max_val=100.0,
+            decimals=4,
+        )
+        box_low_pct_ch1.valueChanged.connect(
+            lambda x: self._on_clip_pct_changed(1, "low_pct", x)
+        )
+        self.ui.box_low_pct_ch1 = box_low_pct_ch1
+
+        box_high_pct_ch1 = ParamValueBox(
+            label="high % clip - ch1",
+            default=self.config["channels"][1]["high_pct"],
+            min_val=0.0,
+            max_val=100.0,
+            decimals=4,
+        )
+        box_high_pct_ch1.valueChanged.connect(
+            lambda x: self._on_clip_pct_changed(1, "high_pct", x)
+        )
+        self.ui.box_high_pct_ch1 = box_high_pct_ch1
+
+        for i, j in zip(
+            [0, 1, 2, 3],
+            [box_low_pct_ch0, box_high_pct_ch0, box_low_pct_ch1, box_high_pct_ch1],
+        ):
             self.layout.insertWidget(i, j)
 
     def _set_predict_roi_ui(self, loaded_for_predict=False):
 
-        self._add_min_area_boxes()
+        # Insert min-area boxes between "Renormalize images" (index 4) and "Predict cells"
+        self._add_min_area_boxes(insert_pos=5)
 
         if loaded_for_predict:
 
@@ -1611,20 +1714,39 @@ class PluginManager(QWidget):
 
         else:
 
-            # Re-enable 'Predict cells' and 'Clear' buttons
-            for i in [self.ui.btn_predict, self.ui.btn_clear]:
+            # Re-enable clip-pct boxes, 'Renormalize images', 'Predict cells' and 'Clear'
+            for i in [
+                self.ui.box_low_pct_ch0,
+                self.ui.box_high_pct_ch0,
+                self.ui.box_low_pct_ch1,
+                self.ui.box_high_pct_ch1,
+                self.ui.btn_load,
+                self.ui.btn_predict,
+                self.ui.btn_clear,
+            ]:
 
                 assert i is not None
                 i.setEnabled(True)
 
     def _set_predicting_roi_ui(self):
 
-        self._destroy_ui_widgets(["btn_load", "btn_predict"])
+        self._destroy_ui_widgets([
+            "btn_load",
+            "btn_predict",
+            "box_low_pct_ch0",
+            "box_high_pct_ch0",
+            "box_low_pct_ch1",
+            "box_high_pct_ch1",
+        ])
 
     def _set_apply_edits_ui(self):
 
-        # Add 'Adjust size filter', 'Discard additions', 'Discard deletions' and
-        # 'Apply edits' buttons to viewer if predictions are returned for the first time
+        # Add 'Repredict cells' at the very top, then the four edit buttons below
+        # the min-area boxes.
+        btn_repredict = QPushButton("Repredict cells")
+        btn_repredict.clicked.connect(self._on_repredict_clicked)
+        self.ui.btn_repredict = btn_repredict
+
         btn_filter_size = QPushButton("Adjust size filter")
         btn_filter_size.clicked.connect(self._on_filter_size_clicked)
         self.ui.btn_filter_size = btn_filter_size
@@ -1641,8 +1763,11 @@ class PluginManager(QWidget):
         btn_apply_edits.clicked.connect(self._on_apply_edits_clicked)
         self.ui.btn_apply_edits = btn_apply_edits
 
+        # btn_repredict goes above the min-area boxes (index 0); edit buttons
+        # follow after the two min-area boxes (indices 3-6).
+        self.layout.insertWidget(0, btn_repredict)
         for i, j in zip(
-            [2, 3, 4, 5],
+            [3, 4, 5, 6],
             [
                 btn_filter_size,
                 btn_discard_additions,
@@ -1654,8 +1779,8 @@ class PluginManager(QWidget):
             self.layout.insertWidget(i, j)
 
         # Re-enable 'min n pix' boxes, the edit buttons and 'Clear'
-        # => the edit buttons are already enabled if predictions are returned for the first time
         for i in [
+            self.ui.btn_repredict,
             self.ui.box_min_area_ch0,
             self.ui.box_min_area_ch1,
             self.ui.btn_filter_size,
@@ -1670,9 +1795,10 @@ class PluginManager(QWidget):
 
     def _set_applying_edits_ui(self):
 
-        # Remove 'min n pix' boxes and the edit buttons from viewer
+        # Remove 'Repredict cells', 'min n pix' boxes and the edit buttons from viewer
         self._destroy_ui_widgets(
             [
+                "btn_repredict",
                 "box_min_area_ch0",
                 "box_min_area_ch1",
                 "btn_filter_size",
@@ -1751,13 +1877,14 @@ class PluginManager(QWidget):
                 self.ui.btns_choose_rois[p.key] = box.btn_choose_rois
                 box_elem_list.append(box)
 
-            # Insert widgets: min % ovl boxes, btn_overlap_filter, element boxes,
-            # btn_edit_rois, btn_save
+            # Insert widgets: btn_edit_rois at top, then min % ovl boxes,
+            # btn_overlap_filter, element boxes, btn_save
             widgets_to_insert = (
-                box_min_pct_ovl_list
+                [btn_edit_rois]
+                + box_min_pct_ovl_list
                 + [btn_overlap_filter]
                 + box_elem_list
-                + [btn_edit_rois, btn_save]
+                + [btn_save]
             )
 
             for i, w in enumerate(widgets_to_insert):
@@ -1791,6 +1918,11 @@ class PluginManager(QWidget):
                 "btn_clear",
                 "btn_load",
                 "btn_predict",
+                "box_low_pct_ch0",
+                "box_high_pct_ch0",
+                "box_low_pct_ch1",
+                "box_high_pct_ch1",
+                "btn_repredict",
                 "btn_filter_size",
                 "btn_discard_additions",
                 "btn_discard_deletions",
@@ -2011,6 +2143,8 @@ class PluginManager(QWidget):
 
         self._tube_match_warning = None
 
+        self._last_norm_pcts.clear()
+
         self._set_workflow_state(state=WorkflowState.CLEARED)
 
         self.workflow.reset()
@@ -2037,6 +2171,74 @@ class PluginManager(QWidget):
         # Trigger load worker thread
         self._start_load_thread()
 
+    def _get_changed_pct_channels(self) -> list[int]:
+        """Return indices of channels whose clip-pct values differ from the last normalization."""
+        return [
+            i for i in [0, 1]
+            if (
+                self.config["channels"][i]["low_pct"] != self._last_norm_pcts.get(i, {}).get("low_pct")
+                or self.config["channels"][i]["high_pct"] != self._last_norm_pcts.get(i, {}).get("high_pct")
+            )
+        ]
+
+    def _on_reload_clicked(self):
+
+        changed = self._get_changed_pct_channels()
+
+        if not changed:
+            self._set_message("No clip values changed — images unchanged.", MessageLevel.INFO)
+            return
+
+        self._set_ui_enabled(False)
+
+        self._start_worker_thread(
+            worker_class=NormalizationWorker,
+            worker_args=(self.workflow.data, self.workflow.ch_names, self.config, changed),
+            success_handler=self._on_normalization_finished,
+            thread_attr_name="_normalization_worker_thread",
+            worker_attr_name="_normalization_worker",
+        )
+
+    def _on_normalization_finished(self, worker_output: dict):
+
+        for i, norm_img in worker_output.items():
+            ch_nm = self.workflow.ch_names[i]
+            self.workflow.data[ch_nm]["norm_img"] = norm_img
+            self._last_norm_pcts[i] = {
+                "low_pct": self.config["channels"][i]["low_pct"],
+                "high_pct": self.config["channels"][i]["high_pct"],
+            }
+
+        # Invalidate cached merge blend so the next overlap pass reblends with the new images
+        merge = self.workflow.data.get("merge", {})
+        if "merge_norm_img" in merge:
+            self.workflow.data["merge"]["merge_norm_img"] = None
+
+        if not self._pending_predict:
+            self._show_busy_message("Updating viewer...")
+        self._update_norm_img_layers(ch_indices=list(worker_output.keys()))
+
+        if self._pending_predict:
+            self._pending_predict = False
+            self._set_workflow_state(state=WorkflowState.PREDICTING_ROI)
+            self._on_img_loaded_and_predict_clicked()
+        else:
+            self._set_ui_enabled(True)
+            self._set_message("Images renormalized", MessageLevel.CHECK)
+
+    def _update_norm_img_layers(self, ch_indices: list | None = None):
+        """Update the napari image layers for the given channel indices (default: both)."""
+
+        if ch_indices is None:
+            ch_indices = [0, 1]
+
+        with self.viewer.layers.events.blocker():
+            for k in ch_indices:
+                v = self.workflow.ch_names[k]
+                self.layers[k]["image"].data = self.workflow.data[v]["norm_img"]
+                self.layers[k]["image"].reset_contrast_limits_range()
+                self.layers[k]["image"].reset_contrast_limits()
+
     def _on_predict_clicked(self):
 
         # Trigger load worker thread if 'Predict cells' button was clicked directly
@@ -2052,10 +2254,22 @@ class PluginManager(QWidget):
 
         elif self.state.workflow_state == WorkflowState.PREDICT_ROI:
 
-            # Alternatively, proceed with prediction if 'Load images' button was clicked previously
-            self._set_workflow_state(state=WorkflowState.PREDICTING_ROI)
-
-            self._on_img_loaded_and_predict_clicked()
+            # Renormalize any channel whose clip-pct values have changed before predicting,
+            # so prediction always runs on images that match the displayed clip values.
+            changed = self._get_changed_pct_channels()
+            if changed:
+                self._pending_predict = True
+                self._set_ui_enabled(False)
+                self._start_worker_thread(
+                    worker_class=NormalizationWorker,
+                    worker_args=(self.workflow.data, self.workflow.ch_names, self.config, changed),
+                    success_handler=self._on_normalization_finished,
+                    thread_attr_name="_normalization_worker_thread",
+                    worker_attr_name="_normalization_worker",
+                )
+            else:
+                self._set_workflow_state(state=WorkflowState.PREDICTING_ROI)
+                self._on_img_loaded_and_predict_clicked()
 
     def _start_load_thread(self):
 
@@ -2094,6 +2308,31 @@ class PluginManager(QWidget):
         for i in [0, 1]:
 
             self.workflow.ch_names[i] = metadata["channels"][i]["name"]
+
+        # Update clip-pct box labels to show real channel names
+        clip_pct_labels = {
+            "box_low_pct_ch0": f"low % clip - {self.workflow.ch_names[0]}",
+            "box_high_pct_ch0": f"high % clip - {self.workflow.ch_names[0]}",
+            "box_low_pct_ch1": f"low % clip - {self.workflow.ch_names[1]}",
+            "box_high_pct_ch1": f"high % clip - {self.workflow.ch_names[1]}",
+        }
+        for attr, label in clip_pct_labels.items():
+            box = getattr(self.ui, attr, None)
+            if box is not None:
+                box._label.setText(label)
+
+        # Record the pct values used for this initial load
+        for i in [0, 1]:
+            self._last_norm_pcts[i] = {
+                "low_pct": self.config["channels"][i]["low_pct"],
+                "high_pct": self.config["channels"][i]["high_pct"],
+            }
+
+        # Rename "Load images" to "Renormalize images" and rewire its click handler
+        if self.ui.btn_load is not None:
+            self.ui.btn_load.clicked.disconnect()
+            self.ui.btn_load.clicked.connect(self._on_reload_clicked)
+            self.ui.btn_load.setText("Renormalize images")
 
         self._show_busy_message("Updating viewer...")
 
@@ -2216,6 +2455,50 @@ class PluginManager(QWidget):
             "Prediction finished",
             MessageLevel.CHECK,
         )
+
+    def _on_repredict_clicked(self):
+
+        # Tear down the apply-edits panel (btn_repredict + min-area boxes + edit buttons)
+        self._destroy_ui_widgets([
+            "btn_repredict",
+            "box_min_area_ch0",
+            "box_min_area_ch1",
+            "btn_filter_size",
+            "btn_discard_additions",
+            "btn_discard_deletions",
+            "btn_apply_edits",
+        ])
+
+        # Rebuild the PREDICT_ROI panel: clip-pct boxes (0-3), Renormalize (4),
+        # min-area boxes (5-6), Predict (7).  Channel names are already known.
+        self._add_clip_pct_boxes()
+        for attr, label in [
+            ("box_low_pct_ch0", f"low % clip - {self.workflow.ch_names[0]}"),
+            ("box_high_pct_ch0", f"high % clip - {self.workflow.ch_names[0]}"),
+            ("box_low_pct_ch1", f"low % clip - {self.workflow.ch_names[1]}"),
+            ("box_high_pct_ch1", f"high % clip - {self.workflow.ch_names[1]}"),
+        ]:
+            box = getattr(self.ui, attr, None)
+            if box is not None:
+                box._label.setText(label)
+
+        btn_load = QPushButton("Renormalize images")
+        btn_load.clicked.connect(self._on_reload_clicked)
+        self.ui.btn_load = btn_load
+        self.layout.insertWidget(4, btn_load)
+
+        self._add_min_area_boxes(insert_pos=5)
+
+        btn_predict = QPushButton("Predict cells")
+        btn_predict.clicked.connect(self._on_predict_clicked)
+        self.ui.btn_predict = btn_predict
+        self.layout.insertWidget(7, btn_predict)
+
+        # Switch viewer back to IMAGE_LOADED (channel images only, no editing layers)
+        self._set_viewer_state(ViewerState.IMAGE_LOADED)
+        self.state.workflow_state = WorkflowState.PREDICT_ROI
+
+        self._set_message("", MessageLevel.NONE)
 
     def _on_apply_edits_clicked(self):
 
@@ -2484,6 +2767,12 @@ class PluginManager(QWidget):
             MessageLevel.SAVE,
         )
 
+        QMessageBox.information(
+            self,
+            "Results saved",
+            f"Results saved at:\n{out_dir_path}",
+        )
+
         # Print the collect/omit summary to the terminal, but only when its content
         # differs from the last one printed, so repeated saves of an unchanged
         # selection don't spam the terminal.
@@ -2652,6 +2941,10 @@ class PluginManager(QWidget):
     def _refresh_selection_summary(self):
         """Re-render the per-population selection summary in the message box."""
         self._set_message(self._selection_summary_message(), MessageLevel.CHECK)
+
+    def _on_clip_pct_changed(self, ch_idx: int, key: str, value: float):
+
+        self.config["channels"][ch_idx][key] = float(value)
 
     def _on_min_area_changed(self, key: int, value: float):
 
