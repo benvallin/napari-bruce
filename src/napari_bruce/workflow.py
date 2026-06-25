@@ -1825,7 +1825,7 @@ def merge_elem_lists(
     folder_paths: Sequence[str | Path],
     comment_sep: str = " | ",
     exclude_nos: set[int] | None = None,
-) -> tuple[dict, list[dict]]:
+) -> tuple[dict, list[dict], list[dict], list[dict]]:
     """Combine the PALMRobo element lists produced by several bruce runs.
 
     Each bruce run analyses one field of view and writes its element list(s) into
@@ -1935,7 +1935,81 @@ def merge_elem_lists(
 
     lists = {nm: _emit_elem_txt(elems) for nm, elems in groups.items()}
 
-    return lists, overlaps
+    return lists, overlaps, collected, omitted
+
+
+# %% make_merge_collection_summary() ----
+
+
+def make_merge_collection_summary(
+    collected: list[dict],
+    omitted: list[dict],
+) -> str:
+    """Format a collection/omit summary for merged element lists.
+
+    Args:
+      collected: element dicts from the merged collect stream (output of merge_elem_lists).
+      omitted: element dicts from the merged omit stream.
+
+    Returns:
+      str: formatted summary text.
+    """
+
+    def _label_stats(elems):
+        labels: list[str] = []
+        counts: dict[str, dict[str, int]] = {}
+        for e in elems:
+            if e["type"] == "Text":
+                continue
+            label = e["label"]
+            img_nm = e["img_nm"]
+            if label not in labels:
+                labels.append(label)
+                counts[label] = {}
+            counts[label][img_nm] = counts[label].get(img_nm, 0) + 1
+        totals = {label: sum(counts[label].values()) for label in labels}
+        return labels, counts, totals
+
+    def _fmt(label: str) -> str:
+        # "X-pos/Y-neg" → "X⁺ / Y⁻"  (primary side is always -pos/)
+        label = label.replace("-pos/", "⁺ / ")
+        if label.endswith("-neg"):
+            label = label[:-4] + "⁻"
+        elif label.endswith("-pos"):
+            label = label[:-4] + "⁺"
+        return label
+
+    collect_labels, collect_counts, collect_totals = _label_stats(collected)
+    _, omit_counts, omit_totals = _label_stats(omitted)
+
+    all_labels = list(collect_labels)
+    for e in omitted:
+        if e["type"] != "Text" and e["label"] not in all_labels:
+            all_labels.append(e["label"])
+
+    def _section(title, labels, totals, counts):
+        lines = [f"{title}:", ""]
+        for label in labels:
+            lines.append(f"- {_fmt(label)}: {totals.get(label, 0)}")
+        lines.append("")
+        lines.append("DETAILS:")
+        lines.append("")
+        # Omit populations with no contribution across any image from DETAILS.
+        detail_labels = [lb for lb in labels if totals.get(lb, 0) > 0]
+        for i, label in enumerate(detail_labels):
+            lines.append(f"- {_fmt(label)}:")
+            for img_nm, n in counts.get(label, {}).items():
+                lines.append(f"-> {img_nm}: {n}")
+            if i < len(detail_labels) - 1:
+                lines.append("")
+        return "\n".join(lines)
+
+    separator = "\n\n" + "—" * 15 + "\n\n"
+    return (
+        _section("COLLECTION SUMMARY", all_labels, collect_totals, collect_counts)
+        + separator
+        + _section("OMIT SUMMARY", all_labels, omit_totals, omit_counts)
+    )
 
 
 # %% choose_stardist_n_tiles() ----

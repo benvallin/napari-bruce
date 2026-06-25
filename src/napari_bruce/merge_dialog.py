@@ -477,7 +477,7 @@ class MergeElemLists(QDialog):
         base = f"{prefix}_merged_elem_list" if prefix else "merged_elem_list"
 
         try:
-            merged, overlaps = workflow.merge_elem_lists(folder_paths=folders)
+            merged, overlaps, collected, omitted = workflow.merge_elem_lists(folder_paths=folders)
         except Exception as e:
             QMessageBox.critical(
                 self, "Merge failed", f"{type(e).__name__}: {e}"
@@ -502,7 +502,7 @@ class MergeElemLists(QDialog):
             excluded = resolution.excluded_nos()
             if excluded:
                 try:
-                    merged, _ = workflow.merge_elem_lists(
+                    merged, _, collected, omitted = workflow.merge_elem_lists(
                         folder_paths=folders, exclude_nos=excluded
                     )
                 except Exception as e:
@@ -515,13 +515,18 @@ class MergeElemLists(QDialog):
         # output (elem_list_collect.txt, ...), so a collect-only merge still gets the
         # "_collect" suffix. To avoid overwriting a previous merge, bump a numeric
         # tag "(1)", "(2)", ... applied to the whole group so the set stays together
-        # (collect/omit/all share one index) and no member collides with an existing
-        # file.
+        # (collect/omit/all/collection_summary share one index) and no member collides
+        # with an existing file.
+        summary_base = f"{prefix}_collection_summary" if prefix else "collection_summary"
         n = 0
         while True:
             tag = "" if n == 0 else f" ({n})"
             names = {nm: f"{base}_{nm}{tag}.txt" for nm in merged}
-            if not any((out_dir / fn).exists() for fn in names.values()):
+            summary_name = f"{summary_base}{tag}.txt"
+            if (
+                not any((out_dir / fn).exists() for fn in names.values())
+                and not (out_dir / summary_name).exists()
+            ):
                 break
             n += 1
 
@@ -532,6 +537,12 @@ class MergeElemLists(QDialog):
                 f.write(txt)
             written.append(path)
 
+        summary_txt = workflow.make_merge_collection_summary(collected, omitted)
+        summary_path = out_dir / summary_name
+        with open(summary_path, "w") as f:
+            f.write(summary_txt)
+        written.append(summary_path)
+
         paths = "\n".join(str(p) for p in written)
         exclusion_note = (
             f"{len(excluded)} element(s) excluded to resolve "
@@ -539,7 +550,9 @@ class MergeElemLists(QDialog):
             if overlaps and excluded
             else ""
         )
-        print(f"Merged {len(folders)} element list(s) into:\n{paths}\n{exclusion_note}")
+        # Print collection header (COLLECTION SUMMARY: totals, no DETAILS) to terminal.
+        collection_header = summary_txt.split("\nDETAILS:")[0].rstrip()
+        print(f"Merged {len(folders)} element list(s) into:\n{paths}\n{exclusion_note}\n{collection_header}")
 
         # Report completion in-window rather than via a pop-up dialog. If the user
         # confirmed past an overlap warning, note that it was written anyway.

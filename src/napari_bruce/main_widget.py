@@ -2780,6 +2780,9 @@ class PluginManager(QWidget):
 
         summary = "\n".join(summary_lines)
 
+        with open(Path(out_dir_path, "collection_summary.txt"), "w") as f:
+            f.write(summary)
+
         if summary != self._last_collection_summary_print:
             print(summary)
             print("\n")
