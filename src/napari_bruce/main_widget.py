@@ -11,7 +11,8 @@ import numpy as np
 from pathlib import Path
 from enum import Enum, auto
 from matplotlib.colors import to_rgba
-from contextlib import redirect_stdout, redirect_stderr
+import threading
+import contextlib
 from qtpy.QtWidgets import (
     QPushButton,
     QWidget,
@@ -73,6 +74,7 @@ class MessageLevel(Enum):
 
 class WorkflowState(Enum):
 
+    SELECT_MODEL = auto()
     SELECT_FILE = auto()
     LOAD_IMAGE = auto()
     LOADING_IMAGE = auto()
@@ -142,6 +144,12 @@ class WorkflowData:
 
 class UIComponents:
 
+    box_model_ch0: QWidget | None
+    box_model_ch1: QWidget | None
+    combo_model_ch0: QComboBox | None
+    combo_model_ch1: QComboBox | None
+    btn_load_models: QPushButton | None
+    btn_change_models: QPushButton | None
     btn_select: QPushButton | None
     btn_clear: QPushButton | None
     btn_load: QPushButton | None
@@ -169,6 +177,12 @@ class UIComponents:
         self.reset()
 
     def reset(self):
+        self.box_model_ch0 = None
+        self.box_model_ch1 = None
+        self.combo_model_ch0 = None
+        self.combo_model_ch1 = None
+        self.btn_load_models = None
+        self.btn_change_models = None
         self.btn_select = None
         self.btn_clear = None
         self.btn_load = None
@@ -502,12 +516,93 @@ class NormalizationWorker(BaseWorker):
 # %% LoadModelWorker() ----
 
 
+class _ThreadSuppressor:
+    """Thread-locally suppressible proxy for sys.stdout / sys.stderr.
+
+    Installed once (before the first model load) so that LoadModelWorker can
+    silence StarDist / TF output in its own thread without touching other
+    threads. Each thread has an independent 'silent' flag via threading.local,
+    so silencing the preload thread never affects main-thread output.
+
+    All stream attributes not handled explicitly are forwarded to the wrapped
+    stream via __getattr__ so that the proxy is transparent to the rest of
+    the application.
+    """
+
+    def __init__(self, stream):
+        self._stream = stream
+        self._local = threading.local()
+
+    @contextlib.contextmanager
+    def silence(self):
+        self._local.silent = True
+        try:
+            yield
+        finally:
+            self._local.silent = False
+
+    def write(self, s: str) -> int:
+        if getattr(self._local, "silent", False):
+            return len(s)
+        return self._stream.write(s)
+
+    def writelines(self, lines) -> None:
+        if not getattr(self._local, "silent", False):
+            self._stream.writelines(lines)
+
+    def flush(self) -> None:
+        self._stream.flush()
+
+    def close(self) -> None:
+        pass  # never close the underlying stream
+
+    def __getattr__(self, name: str):
+        return getattr(self._stream, name)
+
+
+@contextlib.contextmanager
+def _silence_model_output():
+    """Silence stdout/stderr in the current thread during StarDist/TF model loading.
+
+    Works only when sys.stdout/stderr are _ThreadSuppressor instances (installed
+    by PluginManager.__init__). Silently no-ops otherwise.
+    """
+    targets = [s for s in (sys.stdout, sys.stderr) if isinstance(s, _ThreadSuppressor)]
+    with contextlib.ExitStack() as stack:
+        for t in targets:
+            stack.enter_context(t.silence())
+        yield
+
+
 class LoadModelWorker(BaseWorker):
 
     def __init__(self, config: dict, parent=None):
 
         super().__init__(parent)
         self.config = config
+
+    def _load_models(self) -> dict:
+        from stardist.models import StarDist2D
+
+        pretrained = [
+            k
+            for k, v in configuration.list_stardist_models().items()
+            if v == "pretrained"
+        ]
+        models = {}
+        for i in [0, 1]:
+            model_nm = self.config["channels"][i]["stardist_model"]
+            if model_nm in pretrained:
+                models[i] = StarDist2D.from_pretrained(model_nm)
+            else:
+                stardist_models_dir_path = Path(
+                    str(importlib.resources.files("napari_bruce")),
+                    "stardist_models",
+                )
+                models[i] = StarDist2D(
+                    None, name=model_nm, basedir=stardist_models_dir_path
+                )
+        return models
 
     def compute(self):
 
@@ -527,28 +622,8 @@ class LoadModelWorker(BaseWorker):
                     except Exception:
                         pass
 
-        # Load StarDist models
-        with open(os.devnull, "w") as f, redirect_stdout(f), redirect_stderr(f):
-            from stardist.models import StarDist2D
-
-            pretrained = [
-                k
-                for k, v in configuration.list_stardist_models().items()
-                if v == "pretrained"
-            ]
-            models = {}
-            for i in [0, 1]:
-                model_nm = self.config["channels"][i]["stardist_model"]
-                if model_nm in pretrained:
-                    models[i] = StarDist2D.from_pretrained(model_nm)
-                else:
-                    stardist_models_dir_path = Path(
-                        str(importlib.resources.files("napari_bruce")),
-                        "stardist_models",
-                    )
-                    models[i] = StarDist2D(
-                        None, name=model_nm, basedir=stardist_models_dir_path
-                    )
+        with _silence_model_output():
+            models = self._load_models()
 
         return models
 
@@ -642,7 +717,7 @@ class PredictFilterWorker(BaseWorker):
                 # Run StarDist
                 img = self.data[v]["norm_img"].astype(np.float32) / 255.0
                 n_tiles = workflow.choose_stardist_n_tiles(img)
-                with open(os.devnull, "w") as f, redirect_stdout(f), redirect_stderr(f):
+                with _silence_model_output():
                     msk = self.models[k].predict_instances(
                         img=img, prob_thresh=None, nms_thresh=None, n_tiles=n_tiles
                     )[0]
@@ -910,7 +985,31 @@ class PluginManager(QWidget):
         # Last collection summary printed to the terminal; re-prints only on change.
         self._last_collection_summary_print = None
 
+        # Names of the models currently held in self.models; used to skip
+        # reloading when the user clicks "Load models" without changing the selection.
+        self._loaded_model_names: dict[int, str | None] = {0: None, 1: None}
+        self._return_to_predict_after_model_change: bool = False
+
+        # Install thread-local suppressor on sys.stdout/stderr so LoadModelWorker
+        # and PredictWorker can silence StarDist/TF output in their own thread
+        # without affecting the main thread or other concurrent threads.
+        for _attr in ("stdout", "stderr"):
+            if not isinstance(getattr(sys, _attr), _ThreadSuppressor):
+                setattr(sys, _attr, _ThreadSuppressor(getattr(sys, _attr)))
+
         self._build_layout()
+
+        # Pre-warm TF/stardist in the background so the first "Load models" click
+        # is fast: by the time the user interacts, TF is initialized and the
+        # default models are cached — the skip-reload path fires instantly.
+        self._start_worker_thread(
+            worker_class=LoadModelWorker,
+            worker_args=(copy.deepcopy(self.config),),
+            success_handler=self._on_startup_models_preloaded,
+            thread_attr_name="_preload_model_worker_thread",
+            worker_attr_name="_preload_model_worker",
+            error_handler=lambda msg: print(f"[bruce] Background model preload failed: {msg}"),
+        )
 
         self._init_viewer_layers()
 
@@ -922,21 +1021,7 @@ class PluginManager(QWidget):
 
         self.viewer.camera.events.zoom.connect(self._update_roi_id_text_size)
 
-        message = f"""Loading StarDist models...
-    
-    Channel 0: {self.config['channels'][0]['stardist_model']}
-    Channel 1: {self.config['channels'][1]['stardist_model']}
-    """
-
-        self._set_message(message, MessageLevel.WORK)
-
-        self._start_worker_thread(
-            worker_class=LoadModelWorker,
-            worker_args=(self.config,),
-            success_handler=self._on_models_loaded,
-            thread_attr_name="_load_model_worker_thread",
-            worker_attr_name="_load_model_worker",
-        )
+        self._set_workflow_state(WorkflowState.SELECT_MODEL)
 
     def _install_layer_colors(self):
         qt_list = next(
@@ -1027,6 +1112,7 @@ class PluginManager(QWidget):
     def _cleanup_all_workers(self):
 
         thread_attr_names = [
+            "_preload_model_worker_thread",
             "_load_model_worker_thread",
             "_load_worker_thread",
             "_normalization_worker_thread",
@@ -1052,6 +1138,7 @@ class PluginManager(QWidget):
         thread_attr_name: str,
         worker_attr_name: str,
         allow_if_running: bool = False,
+        error_handler=None,
     ) -> QThread | None:
 
         existing_thread = getattr(self, thread_attr_name, None)
@@ -1076,9 +1163,8 @@ class PluginManager(QWidget):
 
         worker.sig_success.connect(success_handler)
 
-        worker.sig_error.connect(
-            lambda msg, worker=worker_class.__name__: self._on_worker_error(worker, msg)
-        )
+        default_error_handler = lambda msg, worker=worker_class.__name__: self._on_worker_error(worker, msg)
+        worker.sig_error.connect(error_handler if error_handler is not None else default_error_handler)
 
         worker.sig_success.connect(thread.quit)
         worker.sig_error.connect(thread.quit)
@@ -1104,14 +1190,23 @@ class PluginManager(QWidget):
 
         self.workflow.channel_mismatch = False
         self._pending_predict = False
+        self._return_to_predict_after_model_change = False
 
         self._set_message(
             f"{worker_name} failed with the following error:\n\n{error_msg}",
             MessageLevel.ERROR,
         )
 
-        assert self.ui.btn_clear is not None
-        self.ui.btn_clear.setEnabled(True)
+        if self.ui.btn_clear is not None:
+            self.ui.btn_clear.setEnabled(True)
+        elif self.ui.btn_load_models is not None:
+            # Model loading failed before any Clear button exists; re-enable the
+            # model selection UI so the user can correct the selection and retry.
+            if self.ui.combo_model_ch0 is not None:
+                self.ui.combo_model_ch0.setEnabled(True)
+            if self.ui.combo_model_ch1 is not None:
+                self.ui.combo_model_ch1.setEnabled(True)
+            self.ui.btn_load_models.setEnabled(True)
 
         return
 
@@ -1364,6 +1459,7 @@ class PluginManager(QWidget):
         viewer_state = ViewerState.LOCKED
 
         if workflow_state in {
+            WorkflowState.SELECT_MODEL,
             WorkflowState.SELECT_FILE,
             WorkflowState.LOAD_IMAGE,
             WorkflowState.LOADING_IMAGE,
@@ -1481,7 +1577,11 @@ class PluginManager(QWidget):
 
         workflow_state = self.state.workflow_state
 
-        if workflow_state == WorkflowState.SELECT_FILE:
+        if workflow_state == WorkflowState.SELECT_MODEL:
+
+            self._set_select_model_ui()
+
+        elif workflow_state == WorkflowState.SELECT_FILE:
 
             self._set_select_file_ui()
 
@@ -1577,20 +1677,78 @@ class PluginManager(QWidget):
         self.ui.box_elems.clear()
         self.ui.btns_choose_rois.clear()
 
+    def _set_select_model_ui(self):
+
+        model_options = list(configuration.list_stardist_models().keys())
+
+        ch_labels = {
+            0: f"{self.workflow.ch_names[0]} model" if self.workflow.ch_names else "ch0 model",
+            1: f"{self.workflow.ch_names[1]} model" if self.workflow.ch_names else "ch1 model",
+        }
+
+        row0 = QWidget()
+        row0_layout = QHBoxLayout(row0)
+        row0_layout.setContentsMargins(0, 0, 0, 0)
+        row0_layout.setSpacing(4)
+        row0_layout.addWidget(QLabel(ch_labels[0]))
+        combo0 = QComboBox()
+        combo0.addItems(model_options)
+        combo0.setCurrentText(self.config["channels"][0]["stardist_model"])
+        row0_layout.addWidget(combo0, stretch=1)
+        self.ui.box_model_ch0 = row0
+        self.ui.combo_model_ch0 = combo0
+
+        row1 = QWidget()
+        row1_layout = QHBoxLayout(row1)
+        row1_layout.setContentsMargins(0, 0, 0, 0)
+        row1_layout.setSpacing(4)
+        row1_layout.addWidget(QLabel(ch_labels[1]))
+        combo1 = QComboBox()
+        combo1.addItems(model_options)
+        combo1.setCurrentText(self.config["channels"][1]["stardist_model"])
+        row1_layout.addWidget(combo1, stretch=1)
+        self.ui.box_model_ch1 = row1
+        self.ui.combo_model_ch1 = combo1
+
+        btn_load_models = QPushButton("Load models")
+        btn_load_models.clicked.connect(self._on_load_models_clicked)
+        self.ui.btn_load_models = btn_load_models
+
+        for i, w in enumerate([row0, row1, btn_load_models]):
+            self.layout.insertWidget(i, w)
+
     def _set_select_file_ui(self):
+
+        # Tear down model selection UI (present when coming from SELECT_MODEL).
+        self._destroy_ui_widgets(["box_model_ch0", "combo_model_ch0", "box_model_ch1", "combo_model_ch1", "btn_load_models"])
 
         btn_select = QPushButton("Select file")
         btn_select.clicked.connect(self._on_select_clicked)
         self.header_layout.insertWidget(0, btn_select)
         self.ui.btn_select = btn_select
 
+        # "Change models" at the top of the panel, above the "Select file" row.
+        btn_change_models = QPushButton("Change models")
+        btn_change_models.clicked.connect(self._on_change_models_clicked)
+        self.ui.btn_change_models = btn_change_models
+        self.layout.insertWidget(0, btn_change_models)
+
     def _set_load_image_ui(self):
 
         # Remove 'Select file' button from viewer
         self._destroy_ui_widgets(["btn_select"])
 
-        # Add clip-percentile boxes (positions 0-3) above the action buttons
-        self._add_clip_pct_boxes()
+        # Add 'Change models' button at position 0.
+        # Guard: when entering LOAD_IMAGE from SELECT_FILE (user clicked "Select file"),
+        # the button was already created by _set_select_file_ui — don't create a second one.
+        if self.ui.btn_change_models is None:
+            btn_change_models = QPushButton("Change models")
+            btn_change_models.clicked.connect(self._on_change_models_clicked)
+            self.ui.btn_change_models = btn_change_models
+            self.layout.insertWidget(0, btn_change_models)
+
+        # Add clip-percentile boxes (positions 1-4) above the action buttons
+        self._add_clip_pct_boxes(start=1)
 
         # Add 'Load images', 'Predict cells' and 'Clear' buttons below the boxes
         btn_load = QPushButton("Load images")
@@ -1605,7 +1763,7 @@ class PluginManager(QWidget):
         btn_clear.clicked.connect(lambda checked=False: self._on_clear_clicked())
         self.ui.btn_clear = btn_clear
 
-        for i, j in zip([4, 5, 6], [btn_load, btn_predict, btn_clear]):
+        for i, j in zip([5, 6, 7], [btn_load, btn_predict, btn_clear]):
 
             self.layout.insertWidget(i, j)
 
@@ -1634,7 +1792,23 @@ class PluginManager(QWidget):
 
             self.layout.insertWidget(i, j)
 
-    def _add_clip_pct_boxes(self):
+    def _update_clip_pct_box_labels(self):
+        """Refresh clip-pct box labels to show real channel names.
+
+        Called after ch_names are known (image load) and when rebuilding the
+        PREDICT_ROI panel with freshly created boxes.
+        """
+        for attr, label in [
+            ("box_low_pct_ch0", f"low % clip - {self.workflow.ch_names[0]}"),
+            ("box_high_pct_ch0", f"high % clip - {self.workflow.ch_names[0]}"),
+            ("box_low_pct_ch1", f"low % clip - {self.workflow.ch_names[1]}"),
+            ("box_high_pct_ch1", f"high % clip - {self.workflow.ch_names[1]}"),
+        ]:
+            box = getattr(self.ui, attr, None)
+            if box is not None:
+                box._label.setText(label)
+
+    def _add_clip_pct_boxes(self, start: int = 0):
 
         box_low_pct_ch0 = ParamValueBox(
             label="low % clip - ch0",
@@ -1685,15 +1859,16 @@ class PluginManager(QWidget):
         self.ui.box_high_pct_ch1 = box_high_pct_ch1
 
         for i, j in zip(
-            [0, 1, 2, 3],
+            [start, start + 1, start + 2, start + 3],
             [box_low_pct_ch0, box_high_pct_ch0, box_low_pct_ch1, box_high_pct_ch1],
         ):
             self.layout.insertWidget(i, j)
 
     def _set_predict_roi_ui(self, loaded_for_predict=False):
 
-        # Insert min-area boxes between "Renormalize images" (index 4) and "Predict cells"
-        self._add_min_area_boxes(insert_pos=5)
+        # Insert min-area boxes between "Renormalize images" (index 5) and "Predict cells"
+        # Index 5 because "Change models" button is at 0, clip-pct boxes at 1-4.
+        self._add_min_area_boxes(insert_pos=6)
 
         if loaded_for_predict:
 
@@ -1704,8 +1879,10 @@ class PluginManager(QWidget):
 
         else:
 
-            # Re-enable clip-pct boxes, 'Renormalize images', 'Predict cells' and 'Clear'
+            # Re-enable 'Change models', clip-pct boxes, 'Renormalize images',
+            # 'Predict cells' and 'Clear'
             for i in [
+                self.ui.btn_change_models,
                 self.ui.box_low_pct_ch0,
                 self.ui.box_high_pct_ch0,
                 self.ui.box_low_pct_ch1,
@@ -1753,11 +1930,20 @@ class PluginManager(QWidget):
         btn_apply_edits.clicked.connect(self._on_apply_edits_clicked)
         self.ui.btn_apply_edits = btn_apply_edits
 
-        # btn_repredict goes above the min-area boxes (index 0); edit buttons
-        # follow after the two min-area boxes (indices 3-6).
-        self.layout.insertWidget(0, btn_repredict)
+        # "Change models" is at index 0 when entering from PREDICT_ROI/PREDICTING_ROI
+        # (btn_change_models persists). When entering from "Edit ROIs" (OVERLAP_FILTER_OR_SAVE
+        # → APPLY_EDITS), it was destroyed by _set_applying_edits_ui and must be re-created.
+        if self.ui.btn_change_models is None:
+            btn_change_models = QPushButton("Change models")
+            btn_change_models.clicked.connect(self._on_change_models_clicked)
+            self.ui.btn_change_models = btn_change_models
+            self.layout.insertWidget(0, btn_change_models)
+
+        # btn_repredict goes at index 1, above the two min-area boxes (2-3);
+        # edit buttons follow at indices 4-7.
+        self.layout.insertWidget(1, btn_repredict)
         for i, j in zip(
-            [3, 4, 5, 6],
+            [4, 5, 6, 7],
             [
                 btn_filter_size,
                 btn_discard_additions,
@@ -1768,8 +1954,9 @@ class PluginManager(QWidget):
 
             self.layout.insertWidget(i, j)
 
-        # Re-enable 'min n pix' boxes, the edit buttons and 'Clear'
+        # Re-enable 'Change models', 'min n pix' boxes, the edit buttons and 'Clear'
         for i in [
+            self.ui.btn_change_models,
             self.ui.btn_repredict,
             self.ui.box_min_area_ch0,
             self.ui.box_min_area_ch1,
@@ -1785,9 +1972,11 @@ class PluginManager(QWidget):
 
     def _set_applying_edits_ui(self):
 
-        # Remove 'Repredict cells', 'min n pix' boxes and the edit buttons from viewer
+        # Remove 'Change models', 'Repredict cells', 'min n pix' boxes and
+        # the edit buttons from viewer (overlap/save UI follows, no models button there)
         self._destroy_ui_widgets(
             [
+                "btn_change_models",
                 "btn_repredict",
                 "box_min_area_ch0",
                 "box_min_area_ch1",
@@ -1905,6 +2094,12 @@ class PluginManager(QWidget):
 
         self._destroy_ui_widgets(
             [
+                "box_model_ch0",
+                "combo_model_ch0",
+                "box_model_ch1",
+                "combo_model_ch1",
+                "btn_load_models",
+                "btn_change_models",
                 "btn_clear",
                 "btn_load",
                 "btn_predict",
@@ -2091,13 +2286,107 @@ class PluginManager(QWidget):
         self._set_message(text, MessageLevel.BUSY)
         QApplication.processEvents()
 
+    def _on_change_models_clicked(self):
+
+        # Remember whether we have loaded images so we can skip loading on return.
+        self._return_to_predict_after_model_change = bool(self.workflow.ch_names)
+
+        # Tear down all widgets that may be present in SELECT_FILE, LOAD_IMAGE,
+        # PREDICT_ROI, or APPLY_EDITS (safe to call on None — _destroy_ui_widgets skips them).
+        self._destroy_ui_widgets([
+            "btn_change_models",
+            "btn_select",
+            "box_low_pct_ch0",
+            "box_high_pct_ch0",
+            "box_low_pct_ch1",
+            "box_high_pct_ch1",
+            "btn_load",
+            "btn_predict",
+            "btn_repredict",
+            "box_min_area_ch0",
+            "box_min_area_ch1",
+            "btn_filter_size",
+            "btn_discard_additions",
+            "btn_discard_deletions",
+            "btn_apply_edits",
+        ])
+
+        self._set_workflow_state(WorkflowState.SELECT_MODEL)
+
+    def _on_load_models_clicked(self):
+
+        model0 = self.ui.combo_model_ch0.currentText()
+        model1 = self.ui.combo_model_ch1.currentText()
+
+        # Skip reloading when the selected models are already in memory.
+        if (
+            self.models is not None
+            and self._loaded_model_names.get(0) == model0
+            and self._loaded_model_names.get(1) == model1
+        ):
+            self._set_message("", MessageLevel.NONE)
+            self._after_models_ready()
+            return
+
+        self.config["channels"][0]["stardist_model"] = model0
+        self.config["channels"][1]["stardist_model"] = model1
+
+        self._set_ui_enabled(False)
+
+        self._set_message(
+            f"Loading StarDist models...\n\nChannel 0: {model0}\nChannel 1: {model1}",
+            MessageLevel.WORK,
+        )
+
+        self._start_worker_thread(
+            worker_class=LoadModelWorker,
+            worker_args=(self.config,),
+            success_handler=self._on_models_loaded,
+            thread_attr_name="_load_model_worker_thread",
+            worker_attr_name="_load_model_worker",
+        )
+
     def _on_models_loaded(self, models: dict):
 
         self.models = models
+        self._loaded_model_names = {
+            0: self.config["channels"][0]["stardist_model"],
+            1: self.config["channels"][1]["stardist_model"],
+        }
 
         self._set_message("", MessageLevel.NONE)
 
-        self._set_workflow_state(WorkflowState.SELECT_FILE)
+        self._after_models_ready()
+
+    def _on_startup_models_preloaded(self, models: dict):
+        """Silent handler for the background model preload at startup.
+
+        Caches the result so _on_load_models_clicked can take the skip-reload
+        path instantly when the user keeps the default model selection.
+        Does not advance the workflow state or touch the UI.
+        """
+        self.models = models
+        self._loaded_model_names = {
+            0: self.config["channels"][0]["stardist_model"],
+            1: self.config["channels"][1]["stardist_model"],
+        }
+
+    def _after_models_ready(self):
+        """Transition to the correct state after models are loaded (or skipped)."""
+
+        if self._return_to_predict_after_model_change:
+            # Images were already loaded — skip file selection and loading entirely.
+            self._return_to_predict_after_model_change = False
+            self._destroy_ui_widgets(["box_model_ch0", "combo_model_ch0", "box_model_ch1", "combo_model_ch1", "btn_load_models"])
+            self._rebuild_predict_roi_panel(add_change_models=True)
+        elif self.workflow.path:
+            # File was selected but images not loaded yet — skip file selection,
+            # go straight back to LOAD_IMAGE. Destroy btn_clear so _set_load_image_ui
+            # re-creates it cleanly (it was left over from the previous LOAD_IMAGE pass).
+            self._destroy_ui_widgets(["box_model_ch0", "combo_model_ch0", "box_model_ch1", "combo_model_ch1", "btn_load_models", "btn_clear"])
+            self._set_workflow_state(WorkflowState.LOAD_IMAGE)
+        else:
+            self._set_workflow_state(WorkflowState.SELECT_FILE)
 
     def _on_select_clicked(self):
 
@@ -2135,6 +2424,8 @@ class PluginManager(QWidget):
 
         self._last_norm_pcts.clear()
 
+        self._return_to_predict_after_model_change = False
+
         self._set_workflow_state(state=WorkflowState.CLEARED)
 
         self.workflow.reset()
@@ -2145,7 +2436,7 @@ class PluginManager(QWidget):
 
         self._reset_viewer_layers()
 
-        self._set_workflow_state(state=WorkflowState.SELECT_FILE)
+        self._set_workflow_state(state=WorkflowState.SELECT_MODEL)
 
         self.file_label.setText("")
         self.file_label.setVisible(False)
@@ -2299,16 +2590,7 @@ class PluginManager(QWidget):
             self.workflow.ch_names[i] = metadata["channels"][i]["name"]
 
         # Update clip-pct box labels to show real channel names
-        clip_pct_labels = {
-            "box_low_pct_ch0": f"low % clip - {self.workflow.ch_names[0]}",
-            "box_high_pct_ch0": f"high % clip - {self.workflow.ch_names[0]}",
-            "box_low_pct_ch1": f"low % clip - {self.workflow.ch_names[1]}",
-            "box_high_pct_ch1": f"high % clip - {self.workflow.ch_names[1]}",
-        }
-        for attr, label in clip_pct_labels.items():
-            box = getattr(self.ui, attr, None)
-            if box is not None:
-                box._label.setText(label)
+        self._update_clip_pct_box_labels()
 
         # Record the pct values used for this initial load
         for i in [0, 1]:
@@ -2445,6 +2727,48 @@ class PluginManager(QWidget):
             MessageLevel.CHECK,
         )
 
+    def _rebuild_predict_roi_panel(self, add_change_models: bool = False):
+        """Rebuild the PREDICT_ROI widget panel from a blank layout.
+
+        Layout after rebuild:
+          0: btn_change_models (created here when add_change_models=True, else already present)
+          1-4: clip-pct boxes
+          5: Renormalize images button
+          6-7: min-area boxes
+          8: Predict cells button
+          (+ btn_clear already at end)
+        """
+        if add_change_models:
+            btn_change_models = QPushButton("Change models")
+            btn_change_models.clicked.connect(self._on_change_models_clicked)
+            self.ui.btn_change_models = btn_change_models
+            self.layout.insertWidget(0, btn_change_models)
+
+        self._add_clip_pct_boxes(start=1)
+        self._update_clip_pct_box_labels()
+
+        btn_load = QPushButton("Renormalize images")
+        btn_load.clicked.connect(self._on_reload_clicked)
+        self.ui.btn_load = btn_load
+        self.layout.insertWidget(5, btn_load)
+
+        self._add_min_area_boxes(insert_pos=6)
+
+        btn_predict = QPushButton("Predict cells")
+        btn_predict.clicked.connect(self._on_predict_clicked)
+        self.ui.btn_predict = btn_predict
+        self.layout.insertWidget(8, btn_predict)
+
+        self._set_viewer_state(ViewerState.IMAGE_LOADED)
+        self.state.workflow_state = WorkflowState.PREDICT_ROI
+
+        # btn_clear persists from before model loading and may have been disabled
+        # by _set_ui_enabled(False) when actual model loading ran. Re-enable it.
+        if self.ui.btn_clear is not None:
+            self.ui.btn_clear.setEnabled(True)
+
+        self._set_message("", MessageLevel.NONE)
+
     def _on_repredict_clicked(self):
 
         # Tear down the apply-edits panel (btn_repredict + min-area boxes + edit buttons)
@@ -2458,36 +2782,9 @@ class PluginManager(QWidget):
             "btn_apply_edits",
         ])
 
-        # Rebuild the PREDICT_ROI panel: clip-pct boxes (0-3), Renormalize (4),
-        # min-area boxes (5-6), Predict (7).  Channel names are already known.
-        self._add_clip_pct_boxes()
-        for attr, label in [
-            ("box_low_pct_ch0", f"low % clip - {self.workflow.ch_names[0]}"),
-            ("box_high_pct_ch0", f"high % clip - {self.workflow.ch_names[0]}"),
-            ("box_low_pct_ch1", f"low % clip - {self.workflow.ch_names[1]}"),
-            ("box_high_pct_ch1", f"high % clip - {self.workflow.ch_names[1]}"),
-        ]:
-            box = getattr(self.ui, attr, None)
-            if box is not None:
-                box._label.setText(label)
-
-        btn_load = QPushButton("Renormalize images")
-        btn_load.clicked.connect(self._on_reload_clicked)
-        self.ui.btn_load = btn_load
-        self.layout.insertWidget(4, btn_load)
-
-        self._add_min_area_boxes(insert_pos=5)
-
-        btn_predict = QPushButton("Predict cells")
-        btn_predict.clicked.connect(self._on_predict_clicked)
-        self.ui.btn_predict = btn_predict
-        self.layout.insertWidget(7, btn_predict)
-
-        # Switch viewer back to IMAGE_LOADED (channel images only, no editing layers)
-        self._set_viewer_state(ViewerState.IMAGE_LOADED)
-        self.state.workflow_state = WorkflowState.PREDICT_ROI
-
-        self._set_message("", MessageLevel.NONE)
+        # btn_change_models is still at index 0 (was not destroyed); rebuild
+        # the rest of the PREDICT_ROI panel after it.
+        self._rebuild_predict_roi_panel(add_change_models=False)
 
     def _on_apply_edits_clicked(self):
 
@@ -2581,6 +2878,13 @@ class PluginManager(QWidget):
         # so editing resumes exactly where it left off; re-applying edits then
         # recomputes overlaps and returns here.
         self._teardown_overlap_filter_or_save_ui()
+
+        # Clear stale overlap visualizations so the layers appear empty if the
+        # user makes them visible while editing. Both layers are hidden here
+        # (visible=False), so this is just a CPU numpy allocation — no GPU cost.
+        self.layers["merge"].data = np.zeros_like(self.layers["merge"].data)
+        self.layers["rois"].text = {"constant": ""}
+        self.layers["rois"].data = np.zeros((0, 2))
 
         # Manual ROI selections refer to the overlap result that is about to be
         # recomputed; drop them so the next pass starts from the default top-N.
