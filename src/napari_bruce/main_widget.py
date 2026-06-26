@@ -2436,7 +2436,8 @@ class PluginManager(QWidget):
 
         self._reset_viewer_layers()
 
-        self._set_workflow_state(state=WorkflowState.SELECT_MODEL)
+        next_state = WorkflowState.SELECT_FILE if self.models is not None else WorkflowState.SELECT_MODEL
+        self._set_workflow_state(state=next_state)
 
         self.file_label.setText("")
         self.file_label.setVisible(False)
