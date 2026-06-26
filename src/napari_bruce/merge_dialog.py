@@ -1,5 +1,6 @@
 # %% Import required libraries ----
 
+import sys
 from pathlib import Path
 
 from qtpy.QtCore import Qt
@@ -27,6 +28,15 @@ from . import workflow
 
 
 # %% Helpers ----
+
+
+def _safe_print(text: str) -> None:
+    """Print text, substituting superscript +/- when the console can't encode them."""
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        safe = text.replace("⁺", "-pos").replace("⁻", "-neg")
+        print(safe)
 
 
 def _list_mergeable_subfolders(parent: str | Path) -> list[Path]:
@@ -491,7 +501,7 @@ class MergeElemLists(QDialog):
         excluded: set[int] = set()
         if overlaps:
             warning = workflow.format_overlap_warnings(overlaps)
-            print(warning + "\n")
+            _safe_print(warning + "\n")
             resolution = OverlapResolutionDialog(overlaps, parent=self)
             if resolution.exec_() != QDialog.Accepted:
                 self.status_label.setText(
@@ -533,13 +543,13 @@ class MergeElemLists(QDialog):
         written = []
         for nm, txt in merged.items():
             path = out_dir / names[nm]
-            with open(path, "w") as f:
+            with open(path, "w", encoding="utf-8") as f:
                 f.write(txt)
             written.append(path)
 
         summary_txt = workflow.make_merge_collection_summary(collected, omitted)
         summary_path = out_dir / summary_name
-        with open(summary_path, "w") as f:
+        with open(summary_path, "w", encoding="utf-8") as f:
             f.write(summary_txt)
         written.append(summary_path)
 
@@ -552,7 +562,7 @@ class MergeElemLists(QDialog):
         )
         # Print collection header (COLLECTION SUMMARY: totals, no DETAILS) to terminal.
         collection_header = summary_txt.split("\nDETAILS:")[0].rstrip()
-        print(f"Merged {len(folders)} element list(s) into:\n{paths}\n{exclusion_note}\n{collection_header}")
+        _safe_print(f"Merged {len(folders)} element list(s) into:\n{paths}\n{exclusion_note}\n{collection_header}")
 
         # Report completion in-window rather than via a pop-up dialog. If the user
         # confirmed past an overlap warning, note that it was written anyway.

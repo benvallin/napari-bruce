@@ -54,6 +54,18 @@ ready_path = os.environ.get("NAPARI_BRUCE_READY_FILE")
 if ready_path:
     Path(ready_path).touch(exist_ok=True)
 
+# %% _safe_print() ----
+
+
+def _safe_print(text: str) -> None:
+    """Print text, substituting superscript +/- when the console can't encode them."""
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        safe = text.replace("⁺", "-pos").replace("⁻", "-neg")
+        print(safe)
+
+
 # %% MessageLevel() ----
 
 
@@ -3085,12 +3097,12 @@ class PluginManager(QWidget):
 
         summary = "\n".join(summary_lines)
 
-        with open(Path(out_dir_path, "collection_summary.txt"), "w") as f:
+        with open(Path(out_dir_path, "collection_summary.txt"), "w", encoding="utf-8") as f:
             f.write(summary)
 
         if summary != self._last_collection_summary_print:
-            print(summary)
-            print("\n")
+            _safe_print(summary)
+            _safe_print("\n")
             self._last_collection_summary_print = summary
 
     def _populations_in_config_order(self) -> list[Population]:
