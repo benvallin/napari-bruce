@@ -451,17 +451,17 @@ def make_default_config() -> dict:
         "channels": {
             0: {
                 "name": "TH",
-                "low_pct": 0.05,
-                "high_pct": 99.95,
-                "stardist_model": "2026.04.21_stardist_th_cam",
+                "low_pct": 0.0500,
+                "high_pct": 99.9500,
+                "stardist_model": "2026.04.21-06.10_stardist_th_cam",
                 "min_area_um2": 100,
                 "color": "purple",
             },
             1: {
                 "name": "pSyn",
-                "low_pct": 0.05,
-                "high_pct": 99.9999,
-                "stardist_model": "2026.04.21_stardist_psyn_cam",
+                "low_pct": 1.0000,
+                "high_pct": 99.9990,
+                "stardist_model": "2026.04.21-06.10_stardist_psyn_cam",
                 "min_area_um2": 50,
                 "color": "cyan",
             },
@@ -530,13 +530,13 @@ def make_default_config() -> dict:
         },
         "channels_annotation": {
             0: {
-                "low_pct": 0.05,
-                "high_pct": 99.95,
+                "low_pct": 0.0500,
+                "high_pct": 99.9500,
                 "color": "purple",
             },
             1: {
-                "low_pct": 0.05,
-                "high_pct": 99.9999,
+                "low_pct": 1.0000,
+                "high_pct": 99.9990,
                 "color": "cyan",
             },
         },
