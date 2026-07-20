@@ -898,11 +898,12 @@ def _txt_to_elem_dfs(file: str) -> list:
     if isinstance(df.iloc[0, 0], float) and math.isnan(df.iloc[0, 0]):
         df = df.iloc[1:, :]
 
-    # Record rows corresponding to element headers
-    # => Rows where column 'No' does not contains ',' nor a missing value
-    df["is_header"] = ~(
-        df["No"].astype(str).str.contains(",").astype(bool) | df["No"].isna()
-    )
+    # Record rows corresponding to element headers.
+    # Coordinate rows always have "." in the Type column; element headers have
+    # a real type name (Freehand, Text, Reference, …). Using Type is more robust
+    # than the No column: the inline-label format puts text in No for coordinate
+    # rows, which would fool the old No-based heuristic.
+    df["is_header"] = df["Type"].notna() & (df["Type"] != ".")
 
     # Compute element IDs
     df["elem_id"] = df["is_header"].cumsum()
@@ -970,8 +971,9 @@ def _get_elem_cnt(elem_df: pd.DataFrame) -> np.ndarray:
     # Reshape from (N, 5) to (N*5, 1)
     cnt = cnt.reshape(cnt.shape[0] * cnt.shape[1], 1)
 
-    # Remove rows with missing values
-    cnt = cnt[~np.any(cnt == "nan", axis=1)]
+    # Keep only valid "x,y" coordinate pairs; filters out NaN-padded empties and
+    # any inline text (e.g. Text-element labels) appended after the last coord.
+    cnt = cnt[np.char.count(cnt[:, 0], ",") > 0]
 
     # Split rows into x and y positions
     cnt = np.char.split(cnt, ",")
@@ -1158,6 +1160,7 @@ def _format_elem_cnt(
     thickness: str = "2",
     cutshot: str = "0,0",
     z: str = "-",
+    inline_label: str | None = None,
 ) -> pd.DataFrame:
     """Format element contours for PALM RoboSoftware.
 
@@ -1194,7 +1197,7 @@ def _format_elem_cnt(
             "Z": ["", z],
             "Well": ["", destination],
             "Objective": ["", objective],
-            "Comment": ["", comment],
+            "Comment": ["", "." if inline_label is not None else comment],
             "Coordinates": ["", ""],
         }
     )
@@ -1218,6 +1221,11 @@ def _format_elem_cnt(
     )
 
     cnt = cnt.dropna(how="all")
+
+    if inline_label is not None:
+        # PALMRobo "Marker tool with text" format: label appended tab-separated
+        # after the last coordinate on the coordinate line (Comment col is ".").
+        cnt.iloc[0, elem_cnt.shape[0] % 5] = inline_label
 
     output = pd.concat([header, cnt], ignore_index=True)
 
@@ -1510,12 +1518,13 @@ Elements :\n
                 laser_fun="-",
                 destination="manual",
                 area=0.0,
-                comment=f"{metadata_dict['img_nm']} - FOV center",
+                comment=".",
                 objective=objective,
                 elem_type="Text",
                 thickness="1",
                 cutshot="0,0",
                 z=z,
+                inline_label=f"{metadata_dict['img_nm']}",
             )
         )
 
@@ -1572,6 +1581,16 @@ def _read_elem_txt(
             else f"{img_nm}{comment_sep}{meta['Comment']}"
         )
 
+        # For Text elements written with the new inline-label format, the label
+        # sits in the "No" column of the first coordinate row (after the last
+        # coord) rather than in the Comment column. Recover it so _emit_elem_txt
+        # can re-emit it correctly; None for old-format files or non-Text elements.
+        inline_label = None
+        if is_text and len(df) > 1:
+            candidate = df.iloc[1]["No"]
+            if isinstance(candidate, str) and "," not in candidate:
+                inline_label = candidate
+
         # Z may be parsed as float64 by pandas when all values in the column are
         # numeric; normalise back to integer string to match the source format.
         z_val = meta["Z"]
@@ -1591,6 +1610,7 @@ def _read_elem_txt(
                 "comment": comment,
                 "objective": meta["Objective"],
                 "no": int(meta["No"]),
+                "inline_label": inline_label,
                 # Source FOV and the original (un-prefixed) population label, kept
                 # for cross-image overlap detection (see _find_elem_overlaps). The
                 # label is the part before " #<k> - COLLECT/OMIT"; not meaningful
@@ -1643,6 +1663,7 @@ Elements :\n
             thickness=e["thickness"],
             cutshot=e["cutshot"],
             z=e["z"],
+            inline_label=e.get("inline_label"),
         )
         for e in elems
     ]
