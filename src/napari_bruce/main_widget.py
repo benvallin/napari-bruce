@@ -174,6 +174,14 @@ class UIComponents:
     btn_overlap_filter: QPushButton | None
     btn_edit_rois: QPushButton | None
     btn_save: QPushButton | None
+    lbl_channel_header_ch0: QLabel | None
+    chk_bg_sub_ch0: QCheckBox | None
+    box_bg_sub_radius_ch0: "ParamValueBox | None"
+    chk_robust_norm_ch0: QCheckBox | None
+    lbl_channel_header_ch1: QLabel | None
+    chk_bg_sub_ch1: QCheckBox | None
+    box_bg_sub_radius_ch1: "ParamValueBox | None"
+    chk_robust_norm_ch1: QCheckBox | None
     box_low_pct_ch0: "ParamValueBox | None"
     box_high_pct_ch0: "ParamValueBox | None"
     box_low_pct_ch1: "ParamValueBox | None"
@@ -207,6 +215,14 @@ class UIComponents:
         self.btn_overlap_filter = None
         self.btn_edit_rois = None
         self.btn_save = None
+        self.lbl_channel_header_ch0 = None
+        self.chk_bg_sub_ch0 = None
+        self.box_bg_sub_radius_ch0 = None
+        self.chk_robust_norm_ch0 = None
+        self.lbl_channel_header_ch1 = None
+        self.chk_bg_sub_ch1 = None
+        self.box_bg_sub_radius_ch1 = None
+        self.chk_robust_norm_ch1 = None
         self.box_low_pct_ch0 = None
         self.box_high_pct_ch0 = None
         self.box_low_pct_ch1 = None
@@ -516,12 +532,31 @@ class NormalizationWorker(BaseWorker):
         output = {}
         for i in self.ch_indices:
             ch_nm = self.ch_names[i]
+            ch_config = self.config["channels"][i]
+            img = self.data[ch_nm]["img"]
+
+            if ch_config["background_subtraction"]:
+                bg_cor_img = workflow.subtract_large_scale_background(img, radius=int(ch_config["radius"]))
+                norm_source = bg_cor_img
+            else:
+                bg_cor_img = None
+                norm_source = img
+
+            # Percentile-clipped stretch when robust normalization is on; otherwise
+            # a plain min-max stretch (0th/100th percentile = no clipping) so
+            # norm_img still lands in the 0-255 range every downstream consumer
+            # (StarDist, the merge preview, the display layer) expects.
+            if ch_config["robust_normalization"]:
+                low_pct, high_pct = ch_config["low_pct"], ch_config["high_pct"]
+            else:
+                low_pct, high_pct = 0.0, 100.0
+
             norm_img = workflow.robust_normalization(
-                img=self.data[ch_nm]["img"],
-                low_pct=self.config["channels"][i]["low_pct"],
-                high_pct=self.config["channels"][i]["high_pct"],
+                img=norm_source,
+                low_pct=low_pct,
+                high_pct=high_pct,
             )
-            output[i] = norm_img
+            output[i] = {"bg_cor_img": bg_cor_img, "norm_img": norm_img}
         return output
 
 
@@ -681,13 +716,33 @@ class LoadWorker(BaseWorker):
         for i, k in enumerate(data.keys()):
             # Extract config
             ch_config = self.config["channels"][i]
-            # Perform robust normalization
+
+            img = data[k]["img"]
+
+            # Remove large-scale non-specific background staining before normalization,
+            # keeping the raw img untouched and the correction as its own key
+            if ch_config["background_subtraction"]:
+                bg_cor_img = workflow.subtract_large_scale_background(img, radius=int(ch_config["radius"]))
+                norm_source = bg_cor_img
+            else:
+                bg_cor_img = None
+                norm_source = img
+
+            # Percentile-clipped stretch when robust normalization is on; otherwise
+            # a plain min-max stretch (0th/100th percentile = no clipping) so
+            # norm_img still lands in the 0-255 range every downstream consumer
+            # (StarDist, the merge preview, the display layer) expects.
+            if ch_config["robust_normalization"]:
+                low_pct, high_pct = ch_config["low_pct"], ch_config["high_pct"]
+            else:
+                low_pct, high_pct = 0.0, 100.0
+
             norm_img = workflow.robust_normalization(
-                img=data[k]["img"],
-                low_pct=ch_config["low_pct"],
-                high_pct=ch_config["high_pct"],
+                img=norm_source,
+                low_pct=low_pct,
+                high_pct=high_pct,
             )
-            data[k] = {**data[k], "norm_img": norm_img}
+            data[k] = {**data[k], "bg_cor_img": bg_cor_img, "norm_img": norm_img}
 
         return {"data": data, "metadata": metadata}
 
@@ -989,9 +1044,10 @@ class PluginManager(QWidget):
         self._roi_id_base_text_size = 10
         self._roi_id_ref_zoom = None
 
-        # Last clip-pct values used for normalization, keyed by channel index.
-        # Used to detect which channels changed before a "Renormalize images" run.
-        self._last_norm_pcts = {}
+        # Last clip-pct / background-subtraction / robust-normalization settings
+        # used for normalization, keyed by channel index. Used to detect which
+        # channels changed before a "Reprocess images" run.
+        self._last_norm_settings = {}
         self._pending_predict = False
 
         # Last collection summary printed to the terminal; re-prints only on change.
@@ -1759,8 +1815,10 @@ class PluginManager(QWidget):
             self.ui.btn_change_models = btn_change_models
             self.layout.insertWidget(0, btn_change_models)
 
-        # Add clip-percentile boxes (positions 1-4) above the action buttons
-        self._add_clip_pct_boxes(start=1)
+        # Add the grouped per-channel settings block (positions 1-12: header,
+        # bg-sub checkbox, radius, robust-norm checkbox, low/high clip-pct for
+        # ch0, then the same 6 widgets for ch1) above the action buttons
+        self._add_channel_settings_boxes(start=1)
 
         # Add 'Load images', 'Predict cells' and 'Clear' buttons below the boxes
         btn_load = QPushButton("Load images")
@@ -1775,9 +1833,76 @@ class PluginManager(QWidget):
         btn_clear.clicked.connect(lambda checked=False: self._on_clear_clicked())
         self.ui.btn_clear = btn_clear
 
-        for i, j in zip([5, 6, 7], [btn_load, btn_predict, btn_clear]):
+        for i, j in zip([13, 14, 15], [btn_load, btn_predict, btn_clear]):
 
             self.layout.insertWidget(i, j)
+
+    def _add_channel_settings_boxes(self, start: int = 0):
+        """Build the per-channel settings block, grouped by channel.
+
+        For each channel (ch0's full block, then ch1's), inserts: a bold
+        header label, the background-subtraction checkbox + radius box, the
+        robust-normalization checkbox, then the low/high clip-pct boxes —
+        6 widgets per channel, 12 total. Grouping every setting for a given
+        channel together (rather than by setting type) lets the user find
+        all the controls for one channel at a glance.
+        """
+
+        widgets = []
+
+        for i in [0, 1]:
+
+            ch_config = self.config["channels"][i]
+
+            lbl_header = QLabel(f"Channel {i}")
+            lbl_header.setStyleSheet(f"font-weight: bold; color: {ch_config['color']};")
+            setattr(self.ui, f"lbl_channel_header_ch{i}", lbl_header)
+
+            chk_bg_sub = QCheckBox("Background subtraction")
+            chk_bg_sub.setChecked(ch_config["background_subtraction"])
+            chk_bg_sub.toggled.connect(lambda checked, ch=i: self._on_bg_sub_toggled(ch, checked))
+            setattr(self.ui, f"chk_bg_sub_ch{i}", chk_bg_sub)
+
+            box_radius = ParamValueBox(
+                label="radius (px)",
+                default=ch_config["radius"],
+                min_val=1,
+                max_val=1000,
+            )
+            box_radius.valueChanged.connect(lambda x, ch=i: self._on_bg_sub_radius_changed(ch, x))
+            setattr(self.ui, f"box_bg_sub_radius_ch{i}", box_radius)
+
+            chk_robust_norm = QCheckBox("Robust normalization")
+            chk_robust_norm.setChecked(ch_config["robust_normalization"])
+            chk_robust_norm.toggled.connect(lambda checked, ch=i: self._on_robust_norm_toggled(ch, checked))
+            setattr(self.ui, f"chk_robust_norm_ch{i}", chk_robust_norm)
+
+            box_low_pct = ParamValueBox(
+                label="low % clip",
+                default=ch_config["low_pct"],
+                min_val=0.0,
+                max_val=100.0,
+                decimals=4,
+            )
+            box_low_pct.valueChanged.connect(lambda x, ch=i: self._on_clip_pct_changed(ch, "low_pct", x))
+            box_low_pct.setEnabled(ch_config["robust_normalization"])
+            setattr(self.ui, f"box_low_pct_ch{i}", box_low_pct)
+
+            box_high_pct = ParamValueBox(
+                label="high % clip",
+                default=ch_config["high_pct"],
+                min_val=0.0,
+                max_val=100.0,
+                decimals=4,
+            )
+            box_high_pct.valueChanged.connect(lambda x, ch=i: self._on_clip_pct_changed(ch, "high_pct", x))
+            box_high_pct.setEnabled(ch_config["robust_normalization"])
+            setattr(self.ui, f"box_high_pct_ch{i}", box_high_pct)
+
+            widgets.extend([lbl_header, chk_bg_sub, box_radius, chk_robust_norm, box_low_pct, box_high_pct])
+
+        for offset, w in enumerate(widgets):
+            self.layout.insertWidget(start + offset, w)
 
     def _add_min_area_boxes(self, insert_pos: int = 0):
 
@@ -1805,82 +1930,27 @@ class PluginManager(QWidget):
             self.layout.insertWidget(i, j)
 
     def _update_clip_pct_box_labels(self):
-        """Refresh clip-pct box labels to show real channel names.
+        """Refresh the bold per-channel header to show the real channel name.
 
         Called after ch_names are known (image load) and when rebuilding the
-        PREDICT_ROI panel with freshly created boxes.
+        PREDICT_ROI panel with freshly created boxes. The other per-channel
+        widgets (checkboxes, radius/clip-pct boxes) carry no channel-name
+        suffix — the header above them already identifies the channel.
         """
         for attr, label in [
-            ("box_low_pct_ch0", f"low % clip - {self.workflow.ch_names[0]}"),
-            ("box_high_pct_ch0", f"high % clip - {self.workflow.ch_names[0]}"),
-            ("box_low_pct_ch1", f"low % clip - {self.workflow.ch_names[1]}"),
-            ("box_high_pct_ch1", f"high % clip - {self.workflow.ch_names[1]}"),
+            ("lbl_channel_header_ch0", self.workflow.ch_names[0]),
+            ("lbl_channel_header_ch1", self.workflow.ch_names[1]),
         ]:
-            box = getattr(self.ui, attr, None)
-            if box is not None:
-                box._label.setText(label)
-
-    def _add_clip_pct_boxes(self, start: int = 0):
-
-        box_low_pct_ch0 = ParamValueBox(
-            label="low % clip - ch0",
-            default=self.config["channels"][0]["low_pct"],
-            min_val=0.0,
-            max_val=100.0,
-            decimals=4,
-        )
-        box_low_pct_ch0.valueChanged.connect(
-            lambda x: self._on_clip_pct_changed(0, "low_pct", x)
-        )
-        self.ui.box_low_pct_ch0 = box_low_pct_ch0
-
-        box_high_pct_ch0 = ParamValueBox(
-            label="high % clip - ch0",
-            default=self.config["channels"][0]["high_pct"],
-            min_val=0.0,
-            max_val=100.0,
-            decimals=4,
-        )
-        box_high_pct_ch0.valueChanged.connect(
-            lambda x: self._on_clip_pct_changed(0, "high_pct", x)
-        )
-        self.ui.box_high_pct_ch0 = box_high_pct_ch0
-
-        box_low_pct_ch1 = ParamValueBox(
-            label="low % clip - ch1",
-            default=self.config["channels"][1]["low_pct"],
-            min_val=0.0,
-            max_val=100.0,
-            decimals=4,
-        )
-        box_low_pct_ch1.valueChanged.connect(
-            lambda x: self._on_clip_pct_changed(1, "low_pct", x)
-        )
-        self.ui.box_low_pct_ch1 = box_low_pct_ch1
-
-        box_high_pct_ch1 = ParamValueBox(
-            label="high % clip - ch1",
-            default=self.config["channels"][1]["high_pct"],
-            min_val=0.0,
-            max_val=100.0,
-            decimals=4,
-        )
-        box_high_pct_ch1.valueChanged.connect(
-            lambda x: self._on_clip_pct_changed(1, "high_pct", x)
-        )
-        self.ui.box_high_pct_ch1 = box_high_pct_ch1
-
-        for i, j in zip(
-            [start, start + 1, start + 2, start + 3],
-            [box_low_pct_ch0, box_high_pct_ch0, box_low_pct_ch1, box_high_pct_ch1],
-        ):
-            self.layout.insertWidget(i, j)
+            lbl = getattr(self.ui, attr, None)
+            if lbl is not None:
+                lbl.setText(label)
 
     def _set_predict_roi_ui(self, loaded_for_predict=False):
 
-        # Insert min-area boxes between "Renormalize images" (index 5) and "Predict cells"
-        # Index 5 because "Change models" button is at 0, clip-pct boxes at 1-4.
-        self._add_min_area_boxes(insert_pos=6)
+        # Insert min-area boxes between "Reprocess images" (index 13) and "Predict
+        # cells" (index 14 before insertion). "Change models" is at 0, the grouped
+        # per-channel settings block at 1-12, "Reprocess images" at 13.
+        self._add_min_area_boxes(insert_pos=14)
 
         if loaded_for_predict:
 
@@ -1891,10 +1961,19 @@ class PluginManager(QWidget):
 
         else:
 
-            # Re-enable 'Change models', clip-pct boxes, 'Renormalize images',
-            # 'Predict cells' and 'Clear'
+            # Re-enable 'Change models', background-subtraction controls,
+            # robust-normalization controls, clip-pct boxes, 'Reprocess images',
+            # 'Predict cells' and 'Clear'. All per-channel settings remain
+            # editable after "Load images": changing them and clicking
+            # "Reprocess images" recomputes bg_cor_img/norm_img from the raw img.
             for i in [
                 self.ui.btn_change_models,
+                self.ui.chk_bg_sub_ch0,
+                self.ui.box_bg_sub_radius_ch0,
+                self.ui.chk_robust_norm_ch0,
+                self.ui.chk_bg_sub_ch1,
+                self.ui.box_bg_sub_radius_ch1,
+                self.ui.chk_robust_norm_ch1,
                 self.ui.box_low_pct_ch0,
                 self.ui.box_high_pct_ch0,
                 self.ui.box_low_pct_ch1,
@@ -1907,11 +1986,24 @@ class PluginManager(QWidget):
                 assert i is not None
                 i.setEnabled(True)
 
+            # Clip-pct boxes only matter when robust normalization is enabled for
+            # that channel; the bulk re-enable above doesn't know that, so fix up
+            # their enabled state to match the current config afterwards.
+            self._sync_clip_pct_enabled()
+
     def _set_predicting_roi_ui(self):
 
         self._destroy_ui_widgets([
             "btn_load",
             "btn_predict",
+            "lbl_channel_header_ch0",
+            "chk_bg_sub_ch0",
+            "box_bg_sub_radius_ch0",
+            "chk_robust_norm_ch0",
+            "lbl_channel_header_ch1",
+            "chk_bg_sub_ch1",
+            "box_bg_sub_radius_ch1",
+            "chk_robust_norm_ch1",
             "box_low_pct_ch0",
             "box_high_pct_ch0",
             "box_low_pct_ch1",
@@ -2115,6 +2207,14 @@ class PluginManager(QWidget):
                 "btn_clear",
                 "btn_load",
                 "btn_predict",
+                "lbl_channel_header_ch0",
+                "chk_bg_sub_ch0",
+                "box_bg_sub_radius_ch0",
+                "chk_robust_norm_ch0",
+                "lbl_channel_header_ch1",
+                "chk_bg_sub_ch1",
+                "box_bg_sub_radius_ch1",
+                "chk_robust_norm_ch1",
                 "box_low_pct_ch0",
                 "box_high_pct_ch0",
                 "box_low_pct_ch1",
@@ -2308,6 +2408,14 @@ class PluginManager(QWidget):
         self._destroy_ui_widgets([
             "btn_change_models",
             "btn_select",
+            "lbl_channel_header_ch0",
+            "chk_bg_sub_ch0",
+            "box_bg_sub_radius_ch0",
+            "chk_robust_norm_ch0",
+            "lbl_channel_header_ch1",
+            "chk_bg_sub_ch1",
+            "box_bg_sub_radius_ch1",
+            "chk_robust_norm_ch1",
             "box_low_pct_ch0",
             "box_high_pct_ch0",
             "box_low_pct_ch1",
@@ -2434,7 +2542,7 @@ class PluginManager(QWidget):
 
         self._tube_match_warning = None
 
-        self._last_norm_pcts.clear()
+        self._last_norm_settings.clear()
 
         self._return_to_predict_after_model_change = False
 
@@ -2465,22 +2573,26 @@ class PluginManager(QWidget):
         # Trigger load worker thread
         self._start_load_thread()
 
-    def _get_changed_pct_channels(self) -> list[int]:
-        """Return indices of channels whose clip-pct values differ from the last normalization."""
+    def _get_changed_norm_channels(self) -> list[int]:
+        """Return indices of channels whose clip-pct, background-subtraction or
+        robust-normalization settings differ from the last normalization."""
         return [
             i for i in [0, 1]
             if (
-                self.config["channels"][i]["low_pct"] != self._last_norm_pcts.get(i, {}).get("low_pct")
-                or self.config["channels"][i]["high_pct"] != self._last_norm_pcts.get(i, {}).get("high_pct")
+                self.config["channels"][i]["low_pct"] != self._last_norm_settings.get(i, {}).get("low_pct")
+                or self.config["channels"][i]["high_pct"] != self._last_norm_settings.get(i, {}).get("high_pct")
+                or self.config["channels"][i]["background_subtraction"] != self._last_norm_settings.get(i, {}).get("background_subtraction")
+                or self.config["channels"][i]["radius"] != self._last_norm_settings.get(i, {}).get("radius")
+                or self.config["channels"][i]["robust_normalization"] != self._last_norm_settings.get(i, {}).get("robust_normalization")
             )
         ]
 
     def _on_reload_clicked(self):
 
-        changed = self._get_changed_pct_channels()
+        changed = self._get_changed_norm_channels()
 
         if not changed:
-            self._set_message("No clip values changed — images unchanged.", MessageLevel.INFO)
+            self._set_message("No settings changed — images unchanged.", MessageLevel.INFO)
             return
 
         self._set_ui_enabled(False)
@@ -2495,12 +2607,16 @@ class PluginManager(QWidget):
 
     def _on_normalization_finished(self, worker_output: dict):
 
-        for i, norm_img in worker_output.items():
+        for i, result in worker_output.items():
             ch_nm = self.workflow.ch_names[i]
-            self.workflow.data[ch_nm]["norm_img"] = norm_img
-            self._last_norm_pcts[i] = {
+            self.workflow.data[ch_nm]["bg_cor_img"] = result["bg_cor_img"]
+            self.workflow.data[ch_nm]["norm_img"] = result["norm_img"]
+            self._last_norm_settings[i] = {
                 "low_pct": self.config["channels"][i]["low_pct"],
                 "high_pct": self.config["channels"][i]["high_pct"],
+                "background_subtraction": self.config["channels"][i]["background_subtraction"],
+                "radius": self.config["channels"][i]["radius"],
+                "robust_normalization": self.config["channels"][i]["robust_normalization"],
             }
 
         # Invalidate cached merge blend so the next overlap pass reblends with the new images
@@ -2547,9 +2663,11 @@ class PluginManager(QWidget):
 
         elif self.state.workflow_state == WorkflowState.PREDICT_ROI:
 
-            # Renormalize any channel whose clip-pct values have changed before predicting,
-            # so prediction always runs on images that match the displayed clip values.
-            changed = self._get_changed_pct_channels()
+            # Reprocess any channel whose clip-pct, background-subtraction or
+            # robust-normalization settings have changed before predicting, so
+            # prediction always runs on images that match the currently displayed
+            # settings.
+            changed = self._get_changed_norm_channels()
             if changed:
                 self._pending_predict = True
                 self._set_ui_enabled(False)
@@ -2605,18 +2723,21 @@ class PluginManager(QWidget):
         # Update clip-pct box labels to show real channel names
         self._update_clip_pct_box_labels()
 
-        # Record the pct values used for this initial load
+        # Record the settings used for this initial load
         for i in [0, 1]:
-            self._last_norm_pcts[i] = {
+            self._last_norm_settings[i] = {
                 "low_pct": self.config["channels"][i]["low_pct"],
                 "high_pct": self.config["channels"][i]["high_pct"],
+                "background_subtraction": self.config["channels"][i]["background_subtraction"],
+                "radius": self.config["channels"][i]["radius"],
+                "robust_normalization": self.config["channels"][i]["robust_normalization"],
             }
 
-        # Rename "Load images" to "Renormalize images" and rewire its click handler
+        # Rename "Load images" to "Reprocess images" and rewire its click handler
         if self.ui.btn_load is not None:
             self.ui.btn_load.clicked.disconnect()
             self.ui.btn_load.clicked.connect(self._on_reload_clicked)
-            self.ui.btn_load.setText("Renormalize images")
+            self.ui.btn_load.setText("Reprocess images")
 
         self._show_busy_message("Updating viewer...")
 
@@ -2745,10 +2866,10 @@ class PluginManager(QWidget):
 
         Layout after rebuild:
           0: btn_change_models (created here when add_change_models=True, else already present)
-          1-4: clip-pct boxes
-          5: Renormalize images button
-          6-7: min-area boxes
-          8: Predict cells button
+          1-12: grouped per-channel settings block (see _add_channel_settings_boxes)
+          13: Reprocess images button
+          14-15: min-area boxes
+          16: Predict cells button
           (+ btn_clear already at end)
         """
         if add_change_models:
@@ -2757,20 +2878,21 @@ class PluginManager(QWidget):
             self.ui.btn_change_models = btn_change_models
             self.layout.insertWidget(0, btn_change_models)
 
-        self._add_clip_pct_boxes(start=1)
+        self._add_channel_settings_boxes(start=1)
         self._update_clip_pct_box_labels()
+        self._sync_clip_pct_enabled()
 
-        btn_load = QPushButton("Renormalize images")
+        btn_load = QPushButton("Reprocess images")
         btn_load.clicked.connect(self._on_reload_clicked)
         self.ui.btn_load = btn_load
-        self.layout.insertWidget(5, btn_load)
+        self.layout.insertWidget(13, btn_load)
 
-        self._add_min_area_boxes(insert_pos=6)
+        self._add_min_area_boxes(insert_pos=14)
 
         btn_predict = QPushButton("Predict cells")
         btn_predict.clicked.connect(self._on_predict_clicked)
         self.ui.btn_predict = btn_predict
-        self.layout.insertWidget(8, btn_predict)
+        self.layout.insertWidget(16, btn_predict)
 
         self._set_viewer_state(ViewerState.IMAGE_LOADED)
         self.state.workflow_state = WorkflowState.PREDICT_ROI
@@ -2976,6 +3098,7 @@ class PluginManager(QWidget):
 
         ch_keys = (
             "img",
+            "bg_cor_img",
             "norm_img",
             "msk",
             "filt_msk",
@@ -2997,6 +3120,24 @@ class PluginManager(QWidget):
             "roi_graphics": data["roi_graphics"],
         }
         return out
+
+    def _build_export_config(self) -> dict:
+        """Deep copy of self.config for export, with low_pct/high_pct overridden
+        to 0/100 for any channel with robust_normalization off.
+
+        When robust normalization is disabled, a plain 0th/100th-percentile
+        (min-max) stretch is what's actually applied, regardless of whatever
+        values are sitting in low_pct/high_pct -- so the saved config.json
+        should record that, not the unused percentile values. self.config
+        itself is left untouched so toggling robust normalization back on
+        later restores the user's own percentile settings.
+        """
+        output = copy.deepcopy(self.config)
+        for i in output["channels"]:
+            if not output["channels"][i]["robust_normalization"]:
+                output["channels"][i]["low_pct"] = 0.0
+                output["channels"][i]["high_pct"] = 100.0
+        return output
 
     def _on_save_clicked(self):
 
@@ -3066,7 +3207,7 @@ class PluginManager(QWidget):
 
         # Write config to file
         with open(Path(out_dir_path, "config.json"), "w") as f:
-            json.dump(self.config, f, indent=2)
+            json.dump(self._build_export_config(), f, indent=2)
 
         self._set_message(
             f"Results saved at:\n{self.config['out_dir_path']}\n\nIn subfolder:\n{self.workflow.metadata['img_nm']}",
@@ -3254,6 +3395,35 @@ class PluginManager(QWidget):
     def _on_clip_pct_changed(self, ch_idx: int, key: str, value: float):
 
         self.config["channels"][ch_idx][key] = float(value)
+
+    def _on_bg_sub_toggled(self, ch_idx: int, checked: bool):
+
+        self.config["channels"][ch_idx]["background_subtraction"] = bool(checked)
+
+    def _on_bg_sub_radius_changed(self, ch_idx: int, value: float):
+
+        self.config["channels"][ch_idx]["radius"] = float(value)
+
+    def _on_robust_norm_toggled(self, ch_idx: int, checked: bool):
+
+        self.config["channels"][ch_idx]["robust_normalization"] = bool(checked)
+
+        # Clip-pct only has an effect when robust normalization is on.
+        for attr in [f"box_low_pct_ch{ch_idx}", f"box_high_pct_ch{ch_idx}"]:
+            box = getattr(self.ui, attr, None)
+            if box is not None:
+                box.setEnabled(checked)
+
+    def _sync_clip_pct_enabled(self):
+        """Enable/disable each channel's clip-pct boxes to match its current
+        robust_normalization config value (they only matter when it's on)."""
+
+        for i in [0, 1]:
+            enabled = self.config["channels"][i]["robust_normalization"]
+            for attr in [f"box_low_pct_ch{i}", f"box_high_pct_ch{i}"]:
+                box = getattr(self.ui, attr, None)
+                if box is not None:
+                    box.setEnabled(enabled)
 
     def _on_min_area_changed(self, key: int, value: float):
 

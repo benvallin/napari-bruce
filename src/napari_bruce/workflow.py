@@ -78,6 +78,62 @@ def robust_normalization(
     return output
 
 
+# %% subtract_large_scale_background() ----
+
+
+def subtract_large_scale_background(img: np.ndarray, radius: int = 50, downsample: int = 4) -> np.ndarray:
+    """Remove smooth, large-scale background via disk-shaped morphological opening.
+
+    Estimates a background image by grayscale opening with a disk structuring
+    element sized well above any real cell's diameter, then subtracts it from the
+    input. Removes diffuse, large-scale non-specific background staining (e.g.
+    uneven illumination or slowly-varying autofluorescence) while leaving compact
+    cell-sized signal intact.
+
+    The opening is performed on a downsampled copy of the image (with the radius
+    scaled down to match) and the resulting background estimate is resized back
+    to full resolution before subtraction. Downsampling uses block-min pooling
+    (not averaging) and upsampling uses nearest-neighbor (not interpolation):
+    since the operation being approximated is itself a min/max filter, pooling
+    by minimum keeps the reduced-resolution image consistent with what erosion
+    would see, whereas averaging first washes out the local minima that erosion
+    depends on and measurably biases the background estimate. OpenCV's
+    morphological opening with a disk-shaped kernel has no fast-path
+    decomposition and is otherwise far slower than the equivalent operation on a
+    smaller image.
+
+    Args:
+      img (numpy.ndarray): image to correct.
+      radius (int): structuring element radius, in pixels, at full resolution.
+        Should exceed the radius of the largest plausible real cell.
+      downsample (int): factor by which to shrink the image before estimating
+        the background.
+
+    Returns:
+      numpy.ndarray: background-subtracted image (same dtype as input).
+
+    """
+
+    import cv2
+
+    h, w = img.shape
+    pad_h = (-h) % downsample
+    pad_w = (-w) % downsample
+    padded = cv2.copyMakeBorder(img, 0, pad_h, 0, pad_w, cv2.BORDER_REPLICATE)
+    ph, pw = padded.shape
+    small = padded.reshape(ph // downsample, downsample, pw // downsample, downsample).min(axis=(1, 3))
+
+    small_radius = max(1, round(radius / downsample))
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * small_radius + 1, 2 * small_radius + 1))
+    small_background = cv2.morphologyEx(small, cv2.MORPH_OPEN, kernel)
+    background = cv2.resize(
+        small_background, (small.shape[1] * downsample, small.shape[0] * downsample), interpolation=cv2.INTER_NEAREST
+    )[:h, :w]
+    corrected = cv2.subtract(img, background)
+
+    return corrected
+
+
 # %% msk_to_cnts() ----
 
 

@@ -205,13 +205,21 @@ class ConfigEditor(QDialog):
             form = QFormLayout(box)
             w = {
                 "name": QLineEdit(ch["name"]),
+                "background_subtraction": QCheckBox(),
+                "radius": self._radius_spin(ch["radius"]),
+                "robust_normalization": QCheckBox(),
                 "low_pct": _percent_spin(ch["low_pct"]),
                 "high_pct": _percent_spin(ch["high_pct"]),
                 "stardist_model": _combo(self._model_options, ch["stardist_model"]),
                 "min_area_um2": self._area_spin(ch["min_area_um2"]),
                 "color": _combo(self._channel_colors, ch["color"]),
             }
+            w["background_subtraction"].setChecked(bool(ch["background_subtraction"]))
+            w["robust_normalization"].setChecked(bool(ch["robust_normalization"]))
             form.addRow("name", w["name"])
+            form.addRow("background subtraction", w["background_subtraction"])
+            form.addRow("background subtraction radius (px)", w["radius"])
+            form.addRow("robust normalization", w["robust_normalization"])
             form.addRow("low percentile", w["low_pct"])
             form.addRow("high percentile", w["high_pct"])
             form.addRow("StarDist model", w["stardist_model"])
@@ -322,6 +330,16 @@ class ConfigEditor(QDialog):
 
         return spin
 
+    @staticmethod
+    def _radius_spin(value: float) -> QDoubleSpinBox:
+
+        spin = QDoubleSpinBox()
+        spin.setRange(1.0, 1000.0)
+        spin.setDecimals(0)
+        spin.setValue(float(value))
+
+        return spin
+
     def _with_browse(self, line_edit: QLineEdit) -> QWidget:
         """Wrap a path line edit with a 'Browse…' directory picker."""
 
@@ -374,6 +392,9 @@ class ConfigEditor(QDialog):
             w = self._channel_widgets[key]
             channels[str(key)] = {
                 "name": w["name"].text(),
+                "background_subtraction": w["background_subtraction"].isChecked(),
+                "radius": w["radius"].value(),
+                "robust_normalization": w["robust_normalization"].isChecked(),
                 "low_pct": w["low_pct"].value(),
                 "high_pct": w["high_pct"].value(),
                 "stardist_model": w["stardist_model"].currentText(),

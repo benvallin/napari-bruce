@@ -221,6 +221,9 @@ def check_config_integrity(config: dict) -> None:
 
     exp_subch_kv = {
         "name": str,
+        "background_subtraction": bool,
+        "radius": (int, float),
+        "robust_normalization": bool,
         "low_pct": (int, float),
         "high_pct": (int, float),
         "stardist_model": str,
@@ -294,6 +297,10 @@ def check_config_integrity(config: dict) -> None:
                 raise ConfigError(
                     f"config['channels']['{i}']['{j}'] must be between 0 and 100."
                 )
+
+        if not (config["channels"][i]["radius"] > 0):
+
+            raise ConfigError(f"config['channels']['{i}']['radius'] must be greater than 0.")
 
     check_dict_kv(
         exp_kv=exp_elem_kv, in_dict=config["elements"], dict_nm="config elements"
@@ -451,6 +458,9 @@ def make_default_config() -> dict:
         "channels": {
             0: {
                 "name": "TH",
+                "background_subtraction": True,
+                "radius": 50,
+                "robust_normalization": True,
                 "low_pct": 0.0500,
                 "high_pct": 99.9500,
                 "stardist_model": "2026.04.21-06.10_stardist_th_cam",
@@ -459,6 +469,9 @@ def make_default_config() -> dict:
             },
             1: {
                 "name": "pSyn",
+                "background_subtraction": True,
+                "radius": 50,
+                "robust_normalization": True,
                 "low_pct": 1.0000,
                 "high_pct": 99.9990,
                 "stardist_model": "2026.04.21-06.10_stardist_psyn_cam",
@@ -577,22 +590,6 @@ def get_config() -> dict:
         except OSError:
 
             raise OSError(f"Could not read config file.")
-
-        # Backward-compat: 'tube_id_matching' lives inside config["elements"].
-        # Older configs lack it entirely; normalize by moving a stray top-level
-        # block (if present) into elements, otherwise injecting a disabled
-        # default. Either way no top-level orphan is left behind.
-        if isinstance(output.get("elements"), dict):
-
-            legacy = output.pop("tube_id_matching", None)
-
-            if "tube_id_matching" not in output["elements"]:
-
-                output["elements"]["tube_id_matching"] = (
-                    legacy
-                    if isinstance(legacy, dict)
-                    else {"enabled": False, "sets": []}
-                )
 
         check_config_integrity(config=output)
 
