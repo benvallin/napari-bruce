@@ -467,7 +467,11 @@ def cli_main(argv: list[str] | None = None) -> None:
 
             raise RuntimeError("java not found on PATH; please install OpenJDK.")
 
-        _launch_napari_with_plugin()
+        returncode = _launch_napari_with_plugin()
+
+        if returncode:
+
+            raise SystemExit(returncode)
 
     except Exception as e:
 

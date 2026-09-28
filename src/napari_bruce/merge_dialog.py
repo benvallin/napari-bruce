@@ -1,9 +1,10 @@
 # %% Import required libraries ----
 
 import sys
+import traceback
 from pathlib import Path
 
-from qtpy.QtCore import Qt
+from qtpy.QtCore import Qt, QObject, QThread, Signal
 from qtpy.QtGui import QFont
 
 from qtpy.QtWidgets import (
@@ -173,6 +174,56 @@ class OverlapResolutionDialog(QDialog):
         return {no for no, keep in self._keep.items() if not keep}
 
 
+# %% MergeWorker() ----
+
+
+class MergeWorker(QObject):
+    """Run workflow.merge_elem_lists() off the UI thread.
+
+    merge_elem_lists() does an O(N^2) pairwise contour-overlap scan over every
+    cut element being merged; for many folders/thousands of elements this can
+    take seconds, and running it synchronously on a button click would freeze
+    the whole napari GUI (this dialog has no other worker infrastructure, so a
+    small bespoke QObject/QThread pair is used here rather than the fuller
+    generic worker machinery in main_widget.py).
+    """
+
+    sig_success = Signal(tuple)
+    sig_error = Signal(str)
+
+    def __init__(
+        self,
+        folder_paths,
+        exclude_nos: set[int] | None = None,
+        detect_overlaps: bool = True,
+        parent=None,
+    ):
+
+        super().__init__(parent)
+        self.folder_paths = folder_paths
+        self.exclude_nos = exclude_nos
+        self.detect_overlaps = detect_overlaps
+
+    def run(self):
+
+        try:
+
+            result = workflow.merge_elem_lists(
+                folder_paths=self.folder_paths,
+                exclude_nos=self.exclude_nos,
+                detect_overlaps=self.detect_overlaps,
+            )
+            self.sig_success.emit(result)
+
+        except Exception as e:
+
+            # Print the full traceback to the terminal for debuggability (matching
+            # main_widget.py's BaseWorker.run()); the dialog itself only needs the
+            # short message for its QMessageBox.
+            traceback.print_exc()
+            self.sig_error.emit(f"{type(e).__name__}: {e}")
+
+
 # %% MergeElemLists() ----
 
 
@@ -200,6 +251,21 @@ class MergeElemLists(QDialog):
         # State of the last completed merge — (selected path strings, output dir,
         # file name prefix) — used to disable Merge until any of these changes again.
         self._last_merged_state = None
+
+        # True while a background merge computation is in flight — keeps Merge
+        # disabled regardless of what _update_merge_enabled would otherwise
+        # compute, so a checkbox/field change during the compute can't re-enable
+        # it and let the user fire a second, overlapping merge.
+        self._merge_in_progress = False
+        self._merge_worker_thread: QThread | None = None
+        self._merge_worker: "MergeWorker | None" = None
+
+        # Stashed by _on_merge, consumed by _finalize_merge once the chained
+        # background pass(es) complete -- see _start_merge_worker.
+        self._merge_folders: list[Path] = []
+        self._merge_out_dir: Path | None = None
+        self._merge_prefix: str = ""
+        self._merge_base: str = ""
 
         # Explicit base font (point size + weight set so its resolve mask is
         # non-empty) used to keep group-box CONTENTS at the default size while only
@@ -384,10 +450,32 @@ class MergeElemLists(QDialog):
         output directory, file name prefix) that differs from the last completed
         merge."""
 
+        if self._merge_in_progress:
+            self.btn_merge.setEnabled(False)
+            return
+
         selected = {str(f) for f in self._selected_folders()}
         state = (selected, self.edit_out.text(), self.edit_filename.text())
         unchanged = state == self._last_merged_state
         self.btn_merge.setEnabled(len(selected) >= 2 and not unchanged)
+
+    def closeEvent(self, event):
+
+        # Refuse to close while a merge is running, rather than blocking here
+        # with thread.wait() (freezes the GUI for the remainder of the
+        # O(N^2) overlap scan -- the exact synchronous freeze MergeWorker was
+        # introduced to avoid) or letting the dialog get destroyed while a
+        # queued worker signal could still be delivered to it afterward (a
+        # "wrapped C/C++ object has been deleted" crash risk).
+        if isinstance(self._merge_worker_thread, QThread) and self._merge_worker_thread.isRunning():
+            self.status_label.setText(
+                "A merge is currently in progress. Please wait for it to "
+                "finish before closing this window."
+            )
+            event.ignore()
+            return
+
+        super().closeEvent(event)
 
     def _checkboxes(self) -> list[QCheckBox]:
 
@@ -466,6 +554,52 @@ class MergeElemLists(QDialog):
 
     # -- Merge ------------------------------------------------------------
 
+    def _start_merge_worker(
+        self, folder_paths, on_done, exclude_nos=None, detect_overlaps=True
+    ) -> None:
+        """Run workflow.merge_elem_lists() on a background QThread and route its
+        result to 'on_done' (or _on_merge_error on failure)."""
+
+        thread = QThread()
+        worker = MergeWorker(
+            folder_paths, exclude_nos=exclude_nos, detect_overlaps=detect_overlaps
+        )
+        worker.moveToThread(thread)
+
+        thread.started.connect(worker.run)
+        worker.sig_success.connect(on_done)
+        worker.sig_error.connect(self._on_merge_error)
+        worker.sig_success.connect(thread.quit)
+        worker.sig_error.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+
+        def reset_attrs():
+            # Only clear if these attrs still refer to THIS thread/worker: on the
+            # two-pass merge, pass 1's on_done can synchronously start pass 2
+            # (reassigning self._merge_worker_thread/_merge_worker) before pass
+            # 1's own 'finished' (queued from the same emission, delivered after
+            # on_done) fires this closure -- without the identity check, pass
+            # 1's finished would null out pass 2's still-live references.
+            if self._merge_worker_thread is thread:
+                self._merge_worker_thread = None
+            if self._merge_worker is worker:
+                self._merge_worker = None
+
+        thread.finished.connect(reset_attrs)
+
+        self._merge_worker_thread = thread
+        self._merge_worker = worker
+        thread.start()
+
+    def _end_merge_in_progress(self) -> None:
+        self._merge_in_progress = False
+        self._update_merge_enabled()
+
+    def _on_merge_error(self, error_msg: str) -> None:
+        self._end_merge_in_progress()
+        QMessageBox.critical(self, "Merge failed", error_msg)
+
     def _on_merge(self) -> None:
 
         # The Merge button is only enabled with >=2 selected folders and a changed
@@ -486,72 +620,120 @@ class MergeElemLists(QDialog):
         prefix = self.edit_filename.text().strip()
         base = f"{prefix}_merged_elem_list" if prefix else "merged_elem_list"
 
-        try:
-            merged, overlaps, collected, omitted = workflow.merge_elem_lists(folder_paths=folders)
-        except Exception as e:
-            QMessageBox.critical(
-                self, "Merge failed", f"{type(e).__name__}: {e}"
-            )
-            return
+        # Stashed for _finalize_merge, called once the background pass(es) below
+        # complete -- merge_elem_lists() does an O(N^2) overlap scan, so it runs
+        # off the UI thread (see MergeWorker), possibly twice if the user excludes
+        # overlapping elements via the modal resolution dialog in between.
+        self._merge_folders = folders
+        self._merge_out_dir = out_dir
+        self._merge_prefix = prefix
+        self._merge_base = base
+
+        self._merge_in_progress = True
+        self.btn_merge.setEnabled(False)
+        self.status_label.setText("Merging…")
+
+        self._start_merge_worker(folders, on_done=self._on_first_merge_pass_done)
+
+    def _on_first_merge_pass_done(self, result: tuple) -> None:
+
+        merged, overlaps, collected, omitted = result
 
         # Cut elements from different images whose contours overlap signal
         # partially overlapping FOVs → the same tissue could be captured twice.
         # Show the overlap resolution dialog so the user can inspect each pair
         # and choose which elements to keep before writing.
-        excluded: set[int] = set()
         if overlaps:
             warning = workflow.format_overlap_warnings(overlaps)
             _safe_print(warning + "\n")
             resolution = OverlapResolutionDialog(overlaps, parent=self)
             if resolution.exec_() != QDialog.Accepted:
+                self._end_merge_in_progress()
                 self.status_label.setText(
                     f"✘ Merge cancelled: {len(overlaps)} overlapping element "
                     "pair(s) across images."
                 )
                 return
+
             excluded = resolution.excluded_nos()
+
             if excluded:
-                try:
-                    merged, _, collected, omitted = workflow.merge_elem_lists(
-                        folder_paths=folders, exclude_nos=excluded
-                    )
-                except Exception as e:
-                    QMessageBox.critical(
-                        self, "Merge failed", f"{type(e).__name__}: {e}"
-                    )
-                    return
+                # Re-run with the exclusions applied; overlaps were already found
+                # above, so skip re-scanning for them on this pass.
+                self._start_merge_worker(
+                    self._merge_folders,
+                    on_done=lambda result, overlaps=overlaps, excluded=excluded: (
+                        self._on_second_merge_pass_done(result, overlaps, excluded)
+                    ),
+                    exclude_nos=excluded,
+                    detect_overlaps=False,
+                )
+                return
 
-        # Always suffix the group name (collect / omit / all), mirroring single-run
-        # output (elem_list_collect.txt, ...), so a collect-only merge still gets the
-        # "_collect" suffix. To avoid overwriting a previous merge, bump a numeric
-        # tag "(1)", "(2)", ... applied to the whole group so the set stays together
-        # (collect/omit/all/collection_summary share one index) and no member collides
-        # with an existing file.
-        summary_base = f"{prefix}_collection_summary" if prefix else "collection_summary"
-        n = 0
-        while True:
-            tag = "" if n == 0 else f" ({n})"
-            names = {nm: f"{base}_{nm}{tag}.txt" for nm in merged}
-            summary_name = f"{summary_base}{tag}.txt"
-            if (
-                not any((out_dir / fn).exists() for fn in names.values())
-                and not (out_dir / summary_name).exists()
-            ):
-                break
-            n += 1
+            self._finalize_merge(merged, collected, omitted, overlaps, excluded)
+            return
 
-        written = []
-        for nm, txt in merged.items():
-            path = out_dir / names[nm]
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(txt)
-            written.append(path)
+        self._finalize_merge(merged, collected, omitted, overlaps, set())
 
-        summary_txt = workflow.make_merge_collection_summary(collected, omitted)
-        summary_path = out_dir / summary_name
-        with open(summary_path, "w", encoding="utf-8") as f:
-            f.write(summary_txt)
-        written.append(summary_path)
+    def _on_second_merge_pass_done(
+        self, result: tuple, overlaps: list, excluded: set
+    ) -> None:
+
+        merged, _, collected, omitted = result
+        self._finalize_merge(merged, collected, omitted, overlaps, excluded)
+
+    def _finalize_merge(
+        self, merged: dict, collected: list, omitted: list, overlaps: list, excluded: set
+    ) -> None:
+
+        folders = self._merge_folders
+        out_dir = self._merge_out_dir
+        prefix = self._merge_prefix
+        base = self._merge_base
+
+        # Wrapped in try/except (unlike the pre-threading synchronous version,
+        # an uncaught exception here would leave self._merge_in_progress stuck
+        # True -- see _end_merge_in_progress -- permanently disabling Merge for
+        # the rest of the dialog's life, worse than a normal re-enable would
+        # have been after a failure).
+        try:
+
+            # Always suffix the group name (collect / omit / all), mirroring
+            # single-run output (elem_list_collect.txt, ...), so a collect-only
+            # merge still gets the "_collect" suffix. To avoid overwriting a
+            # previous merge, bump a numeric tag "(1)", "(2)", ... applied to the
+            # whole group so the set stays together (collect/omit/all/
+            # collection_summary share one index) and no member collides with an
+            # existing file.
+            summary_base = f"{prefix}_collection_summary" if prefix else "collection_summary"
+            n = 0
+            while True:
+                tag = "" if n == 0 else f" ({n})"
+                names = {nm: f"{base}_{nm}{tag}.txt" for nm in merged}
+                summary_name = f"{summary_base}{tag}.txt"
+                if (
+                    not any((out_dir / fn).exists() for fn in names.values())
+                    and not (out_dir / summary_name).exists()
+                ):
+                    break
+                n += 1
+
+            written = []
+            for nm, txt in merged.items():
+                path = out_dir / names[nm]
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(txt)
+                written.append(path)
+
+            summary_txt = workflow.make_merge_collection_summary(collected, omitted)
+            summary_path = out_dir / summary_name
+            with open(summary_path, "w", encoding="utf-8") as f:
+                f.write(summary_txt)
+            written.append(summary_path)
+
+        except Exception as e:
+            self._on_merge_error(f"{type(e).__name__}: {e}")
+            return
 
         paths = "\n".join(str(p) for p in written)
         exclusion_note = (
@@ -591,7 +773,7 @@ class MergeElemLists(QDialog):
             self.edit_out.text(),
             self.edit_filename.text(),
         )
-        self._update_merge_enabled()
+        self._end_merge_in_progress()
 
 
 # %% launch_merge_dialog() ----

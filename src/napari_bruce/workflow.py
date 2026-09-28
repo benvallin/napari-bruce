@@ -178,7 +178,15 @@ def msk_to_cnts(msk: np.ndarray) -> dict:
                 sub, mode=cv2.RETR_EXTERNAL, method=cv2.CHAIN_APPROX_NONE
             )
 
-            c = c[0][0].squeeze()
+            # A label can span multiple disconnected fragments (e.g. a manual
+            # erase splitting a cell into two islands still sharing one ID).
+            # cv2 returns one contour per fragment in scan order, not sorted
+            # by size -- picking the largest by area keeps the dominant body
+            # instead of an arbitrary fragment. The common case is exactly one
+            # fragment per cell, so skip the cv2.contourArea() call(s) then --
+            # this loop runs once per cell and was previously a ~60x perf fix.
+            contours = c[0]
+            c = (contours[0] if len(contours) == 1 else max(contours, key=cv2.contourArea)).squeeze()
 
             if len(c) > 2:
 
@@ -201,7 +209,9 @@ def msk_to_cnts(msk: np.ndarray) -> dict:
                 m.astype(np.uint8), mode=cv2.RETR_EXTERNAL, method=cv2.CHAIN_APPROX_NONE
             )
 
-            c = c[0][0].squeeze()
+            # See the largest-fragment note above.
+            contours = c[0]
+            c = (contours[0] if len(contours) == 1 else max(contours, key=cv2.contourArea)).squeeze()
 
             if len(c) > 2:
 
@@ -1293,6 +1303,37 @@ def _format_elem_cnt(
     return output
 
 
+# %% resolve_collect_selection() ----
+
+
+def resolve_collect_selection(
+    ids: list, n_collect: int, override: set | None = None
+) -> set:
+    """Resolve which of 'ids' are selected for collection.
+
+    Single source of truth for the "manual override, else top-N ranked" rule
+    shared by make_elem_metadata() and the "Choose ROIs" GUI (initial selection
+    + on-screen selection summary), so the three call sites can't silently
+    diverge on which cells are collected.
+
+    Args:
+      ids (list): ordered cell IDs (rank order).
+      n_collect (int): number of leading 'ids' selected when 'override' is None.
+      override (set | None): explicit selected-ID set (e.g. from a manual
+        "Choose ROIs" pick); used as-is when given.
+
+    Returns:
+      set: selected cell IDs.
+
+    """
+
+    if override is not None:
+
+        return override
+
+    return set(ids[:n_collect])
+
+
 # %% make_elem_metadata() / make_elem_list() ----
 
 
@@ -1393,12 +1434,13 @@ def make_elem_metadata(
         laser_function = summary[f"{status}_laser_function"]
         tube_id = summary[f"{status}_tube_id"]
 
-        if selected_ids_override and pop_key in selected_ids_override:
-            selected = selected_ids_override[pop_key]
-            cf = [cell_id in selected for cell_id in pop_ids]
-        else:
-            n_collect = summary[f"{status}_collect"]
-            cf = [True] * n_collect + [False] * (len(pop_ids) - n_collect)
+        override = (
+            selected_ids_override.get(pop_key) if selected_ids_override else None
+        )
+        selected = resolve_collect_selection(
+            pop_ids, summary[f"{status}_collect"], override
+        )
+        cf = [cell_id in selected for cell_id in pop_ids]
 
         n_selected = sum(cf)
         c_idx, o_idx = 0, 0
@@ -1463,12 +1505,18 @@ def make_elem_metadata(
     return records, roi_id_map
 
 
-def make_elem_list(records: list[ElemRoi], metadata_dict: dict) -> dict:
+def make_elem_list(
+    records: list[ElemRoi], metadata_dict: dict, extract_z_position: bool = False
+) -> dict:
     """Format resolved ElemRoi records into PALMRobo element-list .txt strings.
 
     Args:
       records (list[ElemRoi]): output of make_elem_metadata().
       metadata_dict (dict): dict of image metadata.
+      extract_z_position (bool): when True, the Z column is populated from the
+        .zvi's extracted focus position (metadata_dict["image"]["position_z"]);
+        when False, the Z column is populated with the default missing value
+        ("-"), regardless of whether position_z is available.
 
     Returns:
       dict: string objects keyed "collect" (and "omit"/"all" when any ROI is
@@ -1493,7 +1541,9 @@ Elements :\n
     # Z (focus) stage position, shared by every element in the list (one focus
     # plane per image). PALMRobo stores it as integer µm; "-" when the source
     # .zvi carried no absolute Focus Position (e.g. single-channel cuts).
-    position_z = metadata_dict["image"].get("position_z")
+    position_z = (
+        metadata_dict["image"].get("position_z") if extract_z_position else None
+    )
     z = str(round(position_z)) if position_z is not None else "-"
 
     # Image-center Text marker, shared by every list (only the "No" varies). A
@@ -1902,6 +1952,7 @@ def merge_elem_lists(
     folder_paths: Sequence[str | Path],
     comment_sep: str = " | ",
     exclude_nos: set[int] | None = None,
+    detect_overlaps: bool = True,
 ) -> tuple[dict, list[dict], list[dict], list[dict]]:
     """Combine the PALMRobo element lists produced by several bruce runs.
 
@@ -1923,6 +1974,10 @@ def merge_elem_lists(
       exclude_nos (set[int] | None): "all"-list element numbers to drop from the
         output.  Overlap detection always runs on the full stream; exclusions are
         applied after and the remaining elements are renumbered.
+      detect_overlaps (bool): when False, skips the O(N^2) overlap scan entirely
+        and returns an empty overlaps list. Set False for a second call whose
+        exclude_nos already resolves overlaps detected by an earlier call, so
+        the same scan isn't redundantly repeated just to discard its result.
 
     Returns:
       tuple: (lists, overlaps) where 'lists' is a dict of PALMRobo .txt strings
@@ -1975,8 +2030,10 @@ def merge_elem_lists(
         e["no"] = j
 
     # Overlap detection always runs on the full stream so the caller receives a
-    # complete picture regardless of any exclusions.
-    overlaps = _find_elem_overlaps(collected + omitted_no_text)
+    # complete picture regardless of any exclusions -- unless the caller already
+    # has that picture (detect_overlaps=False), in which case skip the O(N^2)
+    # scan entirely rather than repeating it just to discard the result.
+    overlaps = _find_elem_overlaps(collected + omitted_no_text) if detect_overlaps else []
 
     # Apply caller-requested exclusions.  Python object identity is used to match
     # elements across the three lists safely (Text elements in `omitted` carry
@@ -2179,9 +2236,19 @@ def pickle_data(data: Any, filename: str | Path) -> None:
 
     sanitized = _make_picklable(data=data)
 
-    with open(filename, "wb") as f:
+    # Write to a sibling tmp file then atomically replace, so a crash/kill
+    # mid-write can never leave a truncated pickle file behind -- data.pkl in
+    # particular can be hundreds of MB (per-channel img/masks/merge arrays),
+    # making it slower and thus more exposed to this than the small
+    # config.json this same pattern was added to protect (see
+    # configuration.write_config).
+    tmp_path = f"{filename}.tmp"
+
+    with open(tmp_path, "wb") as f:
 
         pickle.dump(sanitized, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    os.replace(tmp_path, filename)
 
 
 # %% zvi_to_dict() ----

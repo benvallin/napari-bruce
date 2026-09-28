@@ -4,7 +4,6 @@
 import sys
 import os
 import copy
-import json
 import importlib.resources
 import traceback
 import numpy as np
@@ -174,6 +173,7 @@ class UIComponents:
     btn_overlap_filter: QPushButton | None
     btn_edit_rois: QPushButton | None
     btn_save: QPushButton | None
+    chk_extract_z: QCheckBox | None
     lbl_channel_header_ch0: QLabel | None
     chk_bg_sub_ch0: QCheckBox | None
     box_bg_sub_radius_ch0: "ParamValueBox | None"
@@ -215,6 +215,7 @@ class UIComponents:
         self.btn_overlap_filter = None
         self.btn_edit_rois = None
         self.btn_save = None
+        self.chk_extract_z = None
         self.lbl_channel_header_ch0 = None
         self.chk_bg_sub_ch0 = None
         self.box_bg_sub_radius_ch0 = None
@@ -569,7 +570,7 @@ class _ThreadSuppressor:
     Installed once (before the first model load) so that LoadModelWorker can
     silence StarDist / TF output in its own thread without touching other
     threads. Each thread has an independent 'silent' flag via threading.local,
-    so silencing the preload thread never affects main-thread output.
+    so silencing a worker thread never affects main-thread output.
 
     All stream attributes not handled explicitly are forwarded to the wrapped
     stream via __getattr__ so that the proxy is transparent to the rest of
@@ -989,6 +990,42 @@ class OverlapWorker(BaseWorker):
         return output
 
 
+# %% SaveResultsWorker() ----
+
+
+class SaveResultsWorker(BaseWorker):
+    """Write the per-image results (data.pkl, metadata.pkl, config.json) off the
+    UI thread -- data.pkl in particular can be hundreds of MB for a large
+    two-channel image, and pickling it synchronously on a button click freezes
+    the whole napari GUI for several seconds."""
+
+    def __init__(
+        self, export_data: dict, metadata: dict, export_config: dict, out_dir_path, parent=None
+    ):
+
+        super().__init__(parent)
+        self.export_data = export_data
+        self.metadata = metadata
+        self.export_config = export_config
+        self.out_dir_path = out_dir_path
+
+    def compute(self):
+
+        workflow.pickle_data(
+            data=self.export_data, filename=Path(self.out_dir_path, "data.pkl")
+        )
+
+        workflow.pickle_data(
+            data=self.metadata, filename=Path(self.out_dir_path, "metadata.pkl")
+        )
+
+        configuration.write_config(
+            self.export_config, path=Path(self.out_dir_path, "config.json")
+        )
+
+        return {}
+
+
 # %% _make_color_overlay_delegate() ----
 
 
@@ -1050,6 +1087,14 @@ class PluginManager(QWidget):
         self._last_norm_settings = {}
         self._pending_predict = False
 
+        # True while a background SaveResultsWorker is writing data.pkl/
+        # metadata.pkl/config.json. Guards Clear/Edit ROIs/a second Save
+        # programmatically (ignore the click + show a message) rather than by
+        # disabling those buttons -- disabling btn_edit_rois/btn_clear caused a
+        # brief panel-width flicker (their disabled-state size hint differs
+        # very slightly from enabled), where disabling btn_save alone did not.
+        self._save_results_in_progress = False
+
         # Last collection summary printed to the terminal; re-prints only on change.
         self._last_collection_summary_print = None
 
@@ -1067,17 +1112,12 @@ class PluginManager(QWidget):
 
         self._build_layout()
 
-        # Pre-warm TF/stardist in the background so the first "Load models" click
-        # is fast: by the time the user interacts, TF is initialized and the
-        # default models are cached — the skip-reload path fires instantly.
-        self._start_worker_thread(
-            worker_class=LoadModelWorker,
-            worker_args=(copy.deepcopy(self.config),),
-            success_handler=self._on_startup_models_preloaded,
-            thread_attr_name="_preload_model_worker_thread",
-            worker_attr_name="_preload_model_worker",
-            error_handler=lambda msg: print(f"[bruce] Background model preload failed: {msg}"),
-        )
+        # StarDist models are loaded only on an explicit "Load models" click
+        # (no background startup preload): a prior preload-vs-click race
+        # between two concurrent LoadModelWorker instances (both touching
+        # shared TF/StarDist/self.models state) caused intermittent hangs --
+        # see feedback_qthread_wait_gui_thread memory. The GUI itself (layers,
+        # model menus, "Load models" button) is still available immediately.
 
         self._init_viewer_layers()
 
@@ -1180,13 +1220,13 @@ class PluginManager(QWidget):
     def _cleanup_all_workers(self):
 
         thread_attr_names = [
-            "_preload_model_worker_thread",
             "_load_model_worker_thread",
             "_load_worker_thread",
             "_normalization_worker_thread",
             "_predict_filter_worker_thread",
             "_apply_edits_worker_thread",
             "_overlap_worker_thread",
+            "_save_results_worker_thread",
         ]
 
         for i in thread_attr_names:
@@ -1267,9 +1307,12 @@ class PluginManager(QWidget):
 
         if self.ui.btn_clear is not None:
             self.ui.btn_clear.setEnabled(True)
-        elif self.ui.btn_load_models is not None:
-            # Model loading failed before any Clear button exists; re-enable the
-            # model selection UI so the user can correct the selection and retry.
+
+        if self.ui.btn_load_models is not None:
+            # Model loading failed (either before any Clear button exists, or
+            # mid-session via "Change models" where btn_clear persists
+            # alongside the model-selection panel) — re-enable the model
+            # selection UI so the user can correct the selection and retry.
             if self.ui.combo_model_ch0 is not None:
                 self.ui.combo_model_ch0.setEnabled(True)
             if self.ui.combo_model_ch1 is not None:
@@ -1304,7 +1347,22 @@ class PluginManager(QWidget):
         self.msg_text = QLabel("")
         self.msg_text.setWordWrap(True)
         self.msg_text.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-        self.msg_text.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        # Ignored (not Expanding) horizontally: a long, unbroken absolute path
+        # in message text (e.g. "Results saved at:\n<path>") can't be word-
+        # wrapped below its own width, and with Expanding that natural width
+        # propagates up through the layout chain -- since only the scroll-
+        # hosted panel's HEIGHT is decoupled from napari's canvas, not its
+        # width, this transiently widened the whole panel for a frame. Ignored
+        # tells the layout not to size the panel around this label's content at
+        # all; it still receives (and word-wraps within) whatever width the
+        # layout already has, so an unusually long unbroken word may overflow
+        # its own line rather than grow the panel -- the full path is always
+        # visible in the terminal print and the "Results saved" popup anyway.
+        # (Width-flavored sibling of known_issue_macos_fullscreen_stall, the
+        # documented height-growth version: on full-screen macOS the "GL
+        # canvas resize wedges the buffer-swap/present" stall makes an
+        # otherwise-instant transient frame visibly stick for a moment.)
+        self.msg_text.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
 
         self.msg_container = QWidget()
         self.msg_layout = QHBoxLayout(self.msg_container)
@@ -1336,6 +1394,19 @@ class PluginManager(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        # AlwaysOn (not the default AsNeeded): with setWidgetResizable(True),
+        # 'content' tracks the scroll area's VIEWPORT width, which shrinks by
+        # the scrollbar's own width whenever it appears. The overlap/save
+        # panel is the only one in the whole workflow tall enough to need
+        # vertical scrolling, so AsNeeded meant it alone got a genuinely
+        # narrower content width than every other panel (measured: 19px
+        # narrower) -- that width change, applying/un-applying right as the
+        # panel is entered/left, is the actual cause of the "panel width
+        # flickers on Save" full-screen report (see
+        # known_issue_macos_fullscreen_stall). AlwaysOn reserves the
+        # scrollbar's width on every panel unconditionally, so content width
+        # never depends on whether THIS panel happens to need scrolling.
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
         scroll.setWidget(content)
 
         outer = QVBoxLayout()
@@ -2139,6 +2210,20 @@ class PluginManager(QWidget):
             btn_save.clicked.connect(self._on_save_clicked)
             self.ui.btn_save = btn_save
 
+            # Always seeded from the user-defined config default (set via
+            # --edit-config), never persisted back to self.config: an in-session
+            # toggle is a one-off override for this save, and resets to the
+            # default again every time this panel is rebuilt (e.g. Edit ROIs ->
+            # Apply edits).
+            chk_extract_z = QCheckBox("Extract Z position")
+            chk_extract_z.setChecked(
+                bool(self.config["elements"].get("extract_z_position", False))
+            )
+            chk_extract_z.setStyleSheet(
+                "QCheckBox { margin-top: 18px; margin-bottom: 12px; }"
+            )
+            self.ui.chk_extract_z = chk_extract_z
+
             # Build one element box per population, in the order the user listed
             # them in config["elements"] so the panel reflects their chosen order.
             box_elem_list = []
@@ -2161,12 +2246,13 @@ class PluginManager(QWidget):
                 box_elem_list.append(box)
 
             # Insert widgets: btn_edit_rois at top, then min % ovl boxes,
-            # btn_overlap_filter, element boxes, btn_save
+            # btn_overlap_filter, element boxes, chk_extract_z, btn_save
             widgets_to_insert = (
                 [btn_edit_rois]
                 + box_min_pct_ovl_list
                 + [btn_overlap_filter]
                 + box_elem_list
+                + [chk_extract_z]
                 + [btn_save]
             )
 
@@ -2181,12 +2267,19 @@ class PluginManager(QWidget):
             self.ui.btn_overlap_filter,
             *self.ui.box_elems.values(),
             self.ui.btn_edit_rois,
-            self.ui.btn_save,
+            self.ui.chk_extract_z,
             self.ui.btn_clear,
         ]:
 
             assert i is not None
             i.setEnabled(True)
+
+        # Not part of the blanket re-enable above: a background save can still
+        # be writing (e.g. the user ran "Adjust overlap filter" while a save
+        # from before was in flight), in which case btn_save must stay
+        # disabled until that save's own success/error handler re-enables it.
+        assert self.ui.btn_save is not None
+        self.ui.btn_save.setEnabled(not self._save_results_in_progress)
 
         for btn in self.ui.btns_choose_rois.values():
             btn.setEnabled(True)
@@ -2230,6 +2323,7 @@ class PluginManager(QWidget):
                 "btn_edit_rois",
                 "box_min_pct_ovl_ch0_by_ch1",
                 "box_min_pct_ovl_ch1_by_ch0",
+                "chk_extract_z",
                 "btn_save",
             ]
         )
@@ -2478,19 +2572,6 @@ class PluginManager(QWidget):
 
         self._after_models_ready()
 
-    def _on_startup_models_preloaded(self, models: dict):
-        """Silent handler for the background model preload at startup.
-
-        Caches the result so _on_load_models_clicked can take the skip-reload
-        path instantly when the user keeps the default model selection.
-        Does not advance the workflow state or touch the UI.
-        """
-        self.models = models
-        self._loaded_model_names = {
-            0: self.config["channels"][0]["stardist_model"],
-            1: self.config["channels"][1]["stardist_model"],
-        }
-
     def _after_models_ready(self):
         """Transition to the correct state after models are loaded (or skipped)."""
 
@@ -2534,6 +2615,14 @@ class PluginManager(QWidget):
         self._set_message(".zvi file selected", MessageLevel.INFO)
 
     def _on_clear_clicked(self, *args):
+
+        if self._save_results_in_progress:
+            self._set_message(
+                "A save is currently writing results to disk. Please wait for "
+                "it to finish before clearing.",
+                MessageLevel.WARNING,
+            )
+            return
 
         # Reset attributes to default values
         self.config = copy.deepcopy(config)
@@ -2999,6 +3088,7 @@ class PluginManager(QWidget):
                 "box_min_pct_ovl_ch1_by_ch0",
                 "btn_overlap_filter",
                 "btn_edit_rois",
+                "chk_extract_z",
                 "btn_save",
             ]
         )
@@ -3006,6 +3096,14 @@ class PluginManager(QWidget):
         self._destroy_elem_boxes()
 
     def _on_edit_rois_clicked(self):
+
+        if self._save_results_in_progress:
+            self._set_message(
+                "A save is currently writing results to disk. Please wait for "
+                "it to finish before editing ROIs.",
+                MessageLevel.WARNING,
+            )
+            return
 
         # Step back from the save-results window to the ROI-editing step so the
         # user can add / remove ROIs without clearing and re-predicting. The
@@ -3084,6 +3182,17 @@ class PluginManager(QWidget):
 
         self._refresh_selection_summary()
 
+        # The overlap/save panel just built (and its selection-summary message
+        # just set) here is narrower than the Apply Edits panel it replaced;
+        # flush now so that resize actually paints immediately (matching
+        # _show_busy_message's established pattern elsewhere in this function)
+        # rather than sitting pending. On full-screen macOS an unflushed resize
+        # can stay stuck until some later, unrelated event forces a repaint --
+        # e.g. the "Results saved" QMessageBox popup, which is what made a
+        # resize from arriving HERE look like it was caused by clicking "Save
+        # results" instead (see known_issue_macos_fullscreen_stall).
+        QApplication.processEvents()
+
     def _build_export_data(self) -> dict:
         """Shallow subset + reorder of self.workflow.data for pickling.
 
@@ -3123,7 +3232,9 @@ class PluginManager(QWidget):
 
     def _build_export_config(self) -> dict:
         """Deep copy of self.config for export, with low_pct/high_pct overridden
-        to 0/100 for any channel with robust_normalization off.
+        to 0/100 for any channel with robust_normalization off, and
+        extract_z_position overridden to the "Extract Z position" checkbox's
+        state at save time.
 
         When robust normalization is disabled, a plain 0th/100th-percentile
         (min-max) stretch is what's actually applied, regardless of whatever
@@ -3131,15 +3242,29 @@ class PluginManager(QWidget):
         should record that, not the unused percentile values. self.config
         itself is left untouched so toggling robust normalization back on
         later restores the user's own percentile settings.
+
+        extract_z_position in self.config always holds the user-defined
+        default (the checkbox resets to it on every panel rebuild, never
+        writing back) -- but the saved config.json should record what was
+        actually used to produce this particular element list, which may be a
+        one-off override of that default.
         """
         output = copy.deepcopy(self.config)
         for i in output["channels"]:
             if not output["channels"][i]["robust_normalization"]:
                 output["channels"][i]["low_pct"] = 0.0
                 output["channels"][i]["high_pct"] = 100.0
+        output["elements"]["extract_z_position"] = self._get_chk_extract_z().isChecked()
         return output
 
     def _on_save_clicked(self):
+
+        if self._save_results_in_progress:
+            self._set_message(
+                "A save is already in progress. Please wait for it to finish.",
+                MessageLevel.WARNING,
+            )
+            return
 
         # Read content of 'element' boxes
         self._read_elem_boxes()
@@ -3184,41 +3309,20 @@ class PluginManager(QWidget):
 
             return
 
-        elem_list = workflow.make_elem_list(elem_records, self.workflow.metadata)
+        elem_list = workflow.make_elem_list(
+            elem_records,
+            self.workflow.metadata,
+            extract_z_position=self._get_chk_extract_z().isChecked(),
+        )
 
         for k, txt in elem_list.items():
 
-            with open(Path(out_dir_path, f"elem_list_{k}.txt"), "w") as f:
+            with open(Path(out_dir_path, f"elem_list_{k}.txt"), "w", encoding="utf-8") as f:
                 f.write(txt)
 
         # Record the old-ID -> new-element-ID / collect-omit correspondence so it
         # is persisted alongside the data.
         self.workflow.data["roi_id_map"] = roi_id_map
-
-        # Write data and metadata to file
-        workflow.pickle_data(
-            data=self._build_export_data(), filename=Path(out_dir_path, "data.pkl")
-        )
-
-        workflow.pickle_data(
-            data=self.workflow.metadata,
-            filename=Path(out_dir_path, "metadata.pkl"),
-        )
-
-        # Write config to file
-        with open(Path(out_dir_path, "config.json"), "w") as f:
-            json.dump(self._build_export_config(), f, indent=2)
-
-        self._set_message(
-            f"Results saved at:\n{self.config['out_dir_path']}\n\nIn subfolder:\n{self.workflow.metadata['img_nm']}",
-            MessageLevel.SAVE,
-        )
-
-        QMessageBox.information(
-            self,
-            "Results saved",
-            f"Results saved at:\n{out_dir_path}",
-        )
 
         # Print the collect/omit summary to the terminal, but only when its content
         # differs from the last one printed, so repeated saves of an unchanged
@@ -3246,6 +3350,97 @@ class PluginManager(QWidget):
             _safe_print("\n")
             self._last_collection_summary_print = summary
 
+        # The remaining writes (data.pkl, metadata.pkl, config.json) run off the
+        # UI thread: data.pkl in particular can be hundreds of MB for a large
+        # two-channel image, and pickling it synchronously here would freeze the
+        # whole napari GUI for several seconds. Everything GUI-thread-only
+        # (reading self.ui/self.workflow/self.config) is resolved into plain
+        # data now, before dispatch; the "Results saved" confirmation is shown
+        # only once the worker confirms every file actually made it to disk.
+        export_data = self._build_export_data()
+        export_config = self._build_export_config()
+
+        # Also capture what the success message needs as plain values, not live
+        # self.config/self.workflow reads: if Clear ran mid-save (see below, now
+        # prevented -- but kept as a second line of defense) those get reset to
+        # {} and a live read would KeyError inside the success-handler Qt slot.
+        out_dir_display = self.config["out_dir_path"]
+        img_nm = self.workflow.metadata["img_nm"]
+
+        # Guard the actions that could race with this save -- a second "Save
+        # results" click, "Edit ROIs" (mutates self.workflow.data/metadata
+        # while this save is still reading/using a snapshot of them), and
+        # "Clear" (resets self.workflow/self.config out from under the pending
+        # success handler) -- with a plain flag checked at the top of each of
+        # those handlers, not by disabling btn_edit_rois/btn_clear: their
+        # disabled-state size hint differs very slightly from enabled (visible
+        # as the panel briefly widening/narrowing on macOS), where disabling
+        # btn_save alone does not. self._save_results_in_progress is cleared in
+        # both _on_save_results_finished and _on_save_results_error.
+        self._save_results_in_progress = True
+
+        assert self.ui.btn_save is not None
+        self.ui.btn_save.setEnabled(False)
+
+        self._set_message("Saving results...", MessageLevel.WORK)
+
+        started = self._start_worker_thread(
+            worker_class=SaveResultsWorker,
+            worker_args=(export_data, self.workflow.metadata, export_config, out_dir_path),
+            success_handler=lambda _output, out_dir_path=out_dir_path, out_dir_display=out_dir_display, img_nm=img_nm: (
+                self._on_save_results_finished(out_dir_path, out_dir_display, img_nm)
+            ),
+            thread_attr_name="_save_results_worker_thread",
+            worker_attr_name="_save_results_worker",
+            error_handler=self._on_save_results_error,
+        )
+
+        if started is None:
+            # _start_worker_thread's own single-flight guard refused to start
+            # (a prior SaveResultsWorker thread object hasn't reported itself
+            # finished yet) -- no success/error handler will ever fire for
+            # THIS click, so undo the state set above ourselves rather than
+            # leaving _save_results_in_progress stuck True forever.
+            self._save_results_in_progress = False
+            self.ui.btn_save.setEnabled(True)
+            self._set_message(
+                "A save is already finishing up. Please try again in a moment.",
+                MessageLevel.WARNING,
+            )
+
+    def _on_save_results_finished(self, out_dir_path: Path, out_dir_display: str, img_nm: str):
+
+        self._save_results_in_progress = False
+
+        # btn_save may be gone by now if the user navigated elsewhere while
+        # this save was still writing in the background.
+        if self.ui.btn_save is not None:
+            self.ui.btn_save.setEnabled(True)
+
+        self._set_message(
+            f"Results saved at:\n{out_dir_display}\n\nIn subfolder:\n{img_nm}",
+            MessageLevel.SAVE,
+        )
+
+        QMessageBox.information(
+            self,
+            "Results saved",
+            f"Results saved at:\n{out_dir_path}",
+        )
+
+    def _on_save_results_error(self, error_msg: str):
+        self._save_results_in_progress = False
+        if self.ui.btn_save is not None:
+            self.ui.btn_save.setEnabled(True)
+        # Not routed through the generic _on_worker_error: it unconditionally
+        # resets channel_mismatch/_pending_predict/_return_to_predict_after_model_change,
+        # none of which a save failure has any bearing on -- doing so would
+        # silently clear a still-valid channel-mismatch warning, for example.
+        self._set_message(
+            f"SaveResultsWorker failed with the following error:\n\n{error_msg}",
+            MessageLevel.ERROR,
+        )
+
     def _populations_in_config_order(self) -> list[Population]:
         """Populations ordered as the user listed them in config['elements']."""
         return [
@@ -3269,6 +3464,12 @@ class PluginManager(QWidget):
         assert box is not None
         return box
 
+    def _get_chk_extract_z(self) -> QCheckBox:
+        # Only called once the overlap/save panel has been built (OVERLAP_FILTER_OR_SAVE).
+        chk = self.ui.chk_extract_z
+        assert chk is not None
+        return chk
+
     def _on_n_collect_changed(self, pop_key: str):
         # Drops any manual selection when the spinner is edited directly. The
         # summary is refreshed by on_elem_params_changed, which fires right
@@ -3277,6 +3478,20 @@ class PluginManager(QWidget):
             self._manual_selections.pop(pop_key)
             if pop_key in self.ui.btns_choose_rois:
                 self.ui.btns_choose_rois[pop_key].setText("Choose ROIs")
+
+    def _current_selection(self, pop_key: str) -> set:
+        """Currently selected cell IDs for pop_key: a manual override if one
+        exists, else the default top-'n collect' ranked selection. Single
+        source of truth shared by the "Choose ROIs" dialog's initial selection
+        and the on-screen selection summary (see workflow.resolve_collect_selection,
+        also used by make_elem_metadata() at save time)."""
+        p = POPULATION_BY_KEY[pop_key]
+        ch_nm = self.workflow.ch_names[p.primary_ch]
+        cnts = self.workflow.data[ch_nm]["cnts"][p.status]
+        n_collect = self._get_elem_box(pop_key).spin_n.value()
+        return workflow.resolve_collect_selection(
+            list(cnts.keys()), n_collect, self._manual_selections.get(pop_key)
+        )
 
     def _on_choose_rois_clicked(self, pop_key: str):
 
@@ -3290,12 +3505,7 @@ class PluginManager(QWidget):
 
         rois = [(roi_id, status_dict.get(roi_id, {})) for roi_id in cnts.keys()]
 
-        if pop_key in self._manual_selections:
-            initial_selected = self._manual_selections[pop_key]
-        else:
-            box = self._get_elem_box(pop_key)
-            n_collect = box.spin_n.value()
-            initial_selected = set(list(cnts.keys())[:n_collect])
+        initial_selected = self._current_selection(pop_key)
 
         px_area_um2 = self.workflow.metadata["image"]["px_area_um2"]
         title = self._get_elem_box(pop_key).base_label
@@ -3352,14 +3562,9 @@ class PluginManager(QWidget):
         status = p.status
         ch_nm = self.workflow.ch_names[p.primary_ch]
 
-        cnts = self.workflow.data[ch_nm]["cnts"][status]
         status_dict = self.workflow.data[ch_nm]["roi_status_data"][status]
 
-        if pop_key in self._manual_selections:
-            selected = self._manual_selections[pop_key]
-        else:
-            n_collect = self._get_elem_box(pop_key).spin_n.value()
-            selected = set(list(cnts.keys())[:n_collect])
+        selected = self._current_selection(pop_key)
 
         px_area_um2 = self.workflow.metadata["image"]["px_area_um2"]
         total_area = sum(

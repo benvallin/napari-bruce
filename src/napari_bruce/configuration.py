@@ -187,6 +187,10 @@ def check_config_integrity(config: dict) -> None:
 
     def check_dict_kv(exp_kv, in_dict, dict_nm):
 
+        if not isinstance(in_dict, dict):
+
+            raise ConfigError(f"{dict_nm} must be a dict.")
+
         missing_keys = [x for x in exp_kv.keys() if x not in in_dict.keys()]
 
         if len(missing_keys) > 0:
@@ -231,12 +235,20 @@ def check_config_integrity(config: dict) -> None:
         "color": str,
     }
 
-    exp_elem_kv = {
-        "ch0-pos/ch1-neg": dict,
-        "ch0-pos/ch1-pos": dict,
-        "ch0-pos/ch1-amb": dict,
-        "ch1-pos/ch0-neg": dict,
-        "ch1-pos/ch0-amb": dict,
+    # The 5 cross-channel populations; "extract_z_position" and "tube_id_matching"
+    # also live in config["elements"] but are validated separately below, not as
+    # populations.
+    population_keys = [
+        "ch0-pos/ch1-neg",
+        "ch0-pos/ch1-pos",
+        "ch0-pos/ch1-amb",
+        "ch1-pos/ch0-neg",
+        "ch1-pos/ch0-amb",
+    ]
+
+    exp_elem_kv = {k: dict for k in population_keys} | {
+        "extract_z_position": bool,
+        "tube_id_matching": dict,
     }
 
     exp_subelem_kv = {
@@ -312,10 +324,6 @@ def check_config_integrity(config: dict) -> None:
 
     available_population_colors = list_population_colors()
 
-    # The 5 cross-channel populations; "tube_id_matching" also lives in
-    # config["elements"] but is validated separately below, not as a population.
-    population_keys = list(exp_elem_kv.keys())
-
     for i in population_keys:
 
         check_dict_kv(
@@ -342,10 +350,6 @@ def check_config_integrity(config: dict) -> None:
                 f"config['elements']['{i}']['color'] must be one of {', '.join(available_population_colors)}."
             )
 
-    if "tube_id_matching" not in config["elements"]:
-
-        raise ConfigError("Missing config elements key(s): tube_id_matching.")
-
     tube_id_matching = config["elements"]["tube_id_matching"]
 
     check_dict_kv(
@@ -371,6 +375,13 @@ def check_config_integrity(config: dict) -> None:
         )
 
         match = tube_id_set["match"]
+
+        if not match.strip():
+
+            raise ConfigError(
+                f"config['elements']['tube_id_matching']['sets'][{idx}]['match'] "
+                "must not be empty (an empty string matches every filename)."
+            )
 
         if match.casefold() in seen_matches:
 
@@ -430,6 +441,39 @@ def check_config_integrity(config: dict) -> None:
                 )
 
     return
+
+
+# %% write_config() ----
+
+
+def write_config(config: dict, path: str | Path | None = None) -> None:
+    """Write 'config' to the config.json file as UTF-8, atomically.
+
+    Args:
+      config (dict): dict representing configuration.
+      path (str | Path | None): destination path; defaults to get_config_file_path().
+
+    Side effects:
+      Overwrites the config.json file (or 'path') if it already exists.
+
+    """
+
+    if path is None:
+
+        path = get_config_file_path()
+
+    # Write to a sibling tmp file then atomically replace, so a crash/kill
+    # mid-write can never leave a truncated config.json behind -- a prior
+    # incident lost the real config.json to corruption with no way to recover
+    # it. encoding="utf-8" avoids the Windows cp1252 UnicodeEncodeError this
+    # project already hit once for non-ASCII channel/population labels.
+    tmp_path = f"{path}.tmp"
+
+    with open(tmp_path, "w", encoding="utf-8") as f:
+
+        json.dump(config, f, indent=2)
+
+    os.replace(tmp_path, path)
 
 
 # %% make_default_config() ----
@@ -512,6 +556,11 @@ def make_default_config() -> dict:
                 "laser_function": "RoboLPC",
                 "tube_id": "manual",
             },
+            # When True, the Z (focus) stage position extracted from the .zvi
+            # metadata is written to the exported element list's Z column;
+            # when False, that column is populated with the default missing
+            # value ("-"), as it was before Z extraction was implemented.
+            "extract_z_position": False,
             # When 'enabled' is True, the set whose 'match' string is found
             # (case-insensitive substring) in the loaded image file name
             # overrides the per-population 'tube_id' defaults above.
@@ -555,9 +604,7 @@ def make_default_config() -> dict:
         },
     }
 
-    with open(path, "w") as f:
-
-        json.dump(output, f, indent=2)
+    write_config(output, path=path)
 
     return output
 

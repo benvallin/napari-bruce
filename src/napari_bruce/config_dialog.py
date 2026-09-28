@@ -1,7 +1,5 @@
 # %% Import required libraries ----
 
-import json
-
 from qtpy.QtGui import QFont
 
 from qtpy.QtWidgets import (
@@ -115,7 +113,9 @@ class ConfigEditor(QDialog):
         # Channel keys (int in-memory) and the 5 population keys.
         self._channel_keys = sorted(self.config["channels"].keys())
         self._population_keys = [
-            k for k in self.config["elements"].keys() if k != "tube_id_matching"
+            k
+            for k in self.config["elements"].keys()
+            if k not in ("tube_id_matching", "extract_z_position")
         ]
 
         # Option lists used to seed combos.
@@ -268,6 +268,15 @@ class ConfigEditor(QDialog):
             self._element_widgets[key] = w
             page_layout.addWidget(box)
 
+        z_box = QGroupBox("Z position")
+        z_layout = QVBoxLayout(z_box)
+        self.check_extract_z = QCheckBox("Extract Z position")
+        self.check_extract_z.setChecked(
+            bool(self.config["elements"].get("extract_z_position", False))
+        )
+        z_layout.addWidget(self.check_extract_z)
+        page_layout.addWidget(z_box)
+
         # tube_id_matching: enable flag + dynamic list of sets
         matching = self.config["elements"]["tube_id_matching"]
         match_box = QGroupBox("Tube ID filename matching")
@@ -411,6 +420,7 @@ class ConfigEditor(QDialog):
                 "laser_function": w["laser_function"].currentText(),
                 "tube_id": w["tube_id"].currentText(),
             }
+        elements["extract_z_position"] = self.check_extract_z.isChecked()
         elements["tube_id_matching"] = {
             "enabled": self.check_matching_enabled.isChecked(),
             "sets": [w.value() for w in self._set_widgets],
@@ -449,9 +459,7 @@ class ConfigEditor(QDialog):
 
             return
 
-        with open(configuration.get_config_file_path(), "w") as f:
-
-            json.dump(config, f, indent=2)
+        configuration.write_config(config)
 
         self.accept()
 
