@@ -134,6 +134,82 @@ def subtract_large_scale_background(img: np.ndarray, radius: int = 50, downsampl
     return corrected
 
 
+# %% normalize_img() ----
+
+
+def normalize_img(
+    img: np.ndarray,
+    background_subtraction: bool,
+    radius: float | None,
+    use_robust_normalization: bool,
+    low_pct: float,
+    high_pct: float,
+) -> np.ndarray:
+    """Optionally subtract large-scale background, then normalize to 0-255.
+
+    Robust normalization is a percentile-clipped stretch; when off, a plain
+    min-max stretch (0th/100th percentile = no clipping) is used so the output
+    always lands in the 0-255 range.
+
+    Args:
+      img (numpy.ndarray): raw image.
+      background_subtraction (bool): True to apply subtract_large_scale_background() first.
+      radius (float | None): background subtraction radius in pixels (unused, may be None, if background_subtraction is False).
+      use_robust_normalization (bool): True to clip to low_pct / high_pct.
+      low_pct (float): lower percentile to clip (used if use_robust_normalization).
+      high_pct (float): upper percentile to clip (used if use_robust_normalization).
+
+    Returns:
+      numpy.ndarray: normalized uint8 image.
+
+    """
+
+    source = (
+        subtract_large_scale_background(img, radius=int(radius))
+        if background_subtraction
+        else img
+    )
+
+    if not use_robust_normalization:
+        low_pct, high_pct = 0.0, 100.0
+
+    return robust_normalization(img=source, low_pct=low_pct, high_pct=high_pct)
+
+
+# %% effective_norm_settings() ----
+
+
+def effective_norm_settings(settings: dict) -> dict:
+    """Reduce preprocessing settings to the values that affect the image.
+
+    The radius is irrelevant when background subtraction is off, and the
+    percentiles are irrelevant when robust normalization is off (a min-max
+    stretch, i.e. 0/100, is applied instead). Two settings dicts that produce
+    the same image therefore compare equal after this reduction.
+
+    Args:
+      settings (dict): dict with keys background_subtraction and robust_normalization,
+        plus radius if background subtraction is on and low_pct / high_pct if robust
+        normalization is on (the others may be absent).
+
+    Returns:
+      dict: dict with the same keys; radius is None when background subtraction
+        is off, and low_pct / high_pct are 0.0 / 100.0 when robust normalization is off.
+
+    """
+
+    bg_sub = bool(settings["background_subtraction"])
+    robust = bool(settings["robust_normalization"])
+
+    return {
+        "background_subtraction": bg_sub,
+        "radius": float(settings["radius"]) if bg_sub else None,
+        "robust_normalization": robust,
+        "low_pct": float(settings["low_pct"]) if robust else 0.0,
+        "high_pct": float(settings["high_pct"]) if robust else 100.0,
+    }
+
+
 # %% msk_to_cnts() ----
 
 
@@ -2257,8 +2333,6 @@ def pickle_data(data: Any, filename: str | Path) -> None:
 def zvi_to_dict(
     in_dir_path: str | Path,
     out_dir_path: str | Path,
-    low_pct_dict: dict,
-    high_pct_dict: dict,
     ome_tiff: bool = False,
     tiff: bool = False,
 ) -> None:
@@ -2267,9 +2341,6 @@ def zvi_to_dict(
     Args:
       in_dir_path (str | Path): path to input directory containing .zvi files to process.
       out_dir_path (str | Path): path to output directory.
-      img (numpy.ndarray): image to normalize.
-      low_pct (float): lower percentile to clip for robust normalization of images.
-      high_pct (float): upper percentile to clip for robust normalization of images.
       ome_tiff (bool): True to save OME-TIFF images to out_dir_path/ome.tiff/.
       tiff (bool): True to save single-channel .tiff files to out_dir_path/tiff/.
 
@@ -2342,15 +2413,6 @@ def zvi_to_dict(
             "channels": dict(list(raw_metadata["channels"].items())[:2]),
         }
 
-        # For each channel, perform robust normalization
-        for i, k in enumerate(data.keys()):
-
-            norm_img = robust_normalization(
-                img=data[k]["img"], low_pct=low_pct_dict[i], high_pct=high_pct_dict[i]
-            )
-
-            data[k] = {**data[k], "norm_img": norm_img}
-
         imgs[fn] = {"data": data, "metadata": metadata}
 
     if len(imgs) == 0:
@@ -2384,10 +2446,6 @@ def zvi_to_dict(
                     tifffile.imwrite(
                         Path(tiff_dir_path, f"{i}_{j}_img.tiff"),
                         imgs[i]["data"][j]["img"],
-                    )
-                    tifffile.imwrite(
-                        Path(tiff_dir_path, f"{i}_{j}_norm_img.tiff"),
-                        imgs[i]["data"][j]["norm_img"],
                     )
             except:
                 continue

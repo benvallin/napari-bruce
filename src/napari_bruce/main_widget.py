@@ -182,6 +182,8 @@ class UIComponents:
     chk_bg_sub_ch1: QCheckBox | None
     box_bg_sub_radius_ch1: "ParamValueBox | None"
     chk_robust_norm_ch1: QCheckBox | None
+    chk_default_pred_ch0: QCheckBox | None
+    chk_default_pred_ch1: QCheckBox | None
     box_low_pct_ch0: "ParamValueBox | None"
     box_high_pct_ch0: "ParamValueBox | None"
     box_low_pct_ch1: "ParamValueBox | None"
@@ -224,6 +226,8 @@ class UIComponents:
         self.chk_bg_sub_ch1 = None
         self.box_bg_sub_radius_ch1 = None
         self.chk_robust_norm_ch1 = None
+        self.chk_default_pred_ch0 = None
+        self.chk_default_pred_ch1 = None
         self.box_low_pct_ch0 = None
         self.box_high_pct_ch0 = None
         self.box_low_pct_ch1 = None
@@ -272,6 +276,10 @@ class ParamValueBox(QWidget):
 
         # Signal
         self._spin.valueChanged.connect(self.valueChanged.emit)
+
+    def setValue(self, value: int | float):
+
+        self._spin.setValue(value)
 
 
 # %% ElementConfigBox() ----
@@ -487,6 +495,42 @@ class ChannelSelectWindow(QDialog):
 
     def selected_channels(self):
         return [idx for idx, cb in self._checkboxes.items() if cb.isChecked()]
+
+
+# %% Image preprocessing settings helpers ----
+
+# Layout positions in the PREDICT_ROI panel: "Change models" is at 0, then the
+# grouped per-channel settings block (7 widgets per channel: header, bg-sub
+# checkbox, radius, robust-norm checkbox, low/high clip-pct, default-settings
+# checkbox), then "Reprocess images", the two min-area boxes and "Predict cells".
+_CH_SETTINGS_START = 1
+_CH_SETTINGS_COUNT = 14
+_LOAD_POS = _CH_SETTINGS_START + _CH_SETTINGS_COUNT
+_MIN_AREA_POS = _LOAD_POS + 1
+_PREDICT_POS = _MIN_AREA_POS + 2
+
+_NORM_SETTING_KEYS = (
+    "background_subtraction",
+    "radius",
+    "robust_normalization",
+    "low_pct",
+    "high_pct",
+)
+
+
+def _describe_norm_settings(settings: dict) -> str:
+    """One-line human-readable summary of image preprocessing settings."""
+
+    e = workflow.effective_norm_settings(settings)
+
+    bg = f"ON (radius {e['radius']:g} px)" if e["background_subtraction"] else "OFF"
+    robust = (
+        f"ON ({e['low_pct']:g}-{e['high_pct']:g} %)"
+        if e["robust_normalization"]
+        else "OFF (min-max)"
+    )
+
+    return f"- Background subtraction {bg}\n- Robust normalization {robust}"
 
 
 # %% BaseWorker() ----
@@ -761,6 +805,7 @@ class PredictFilterWorker(BaseWorker):
         ch_names: dict,
         models: dict,
         do_predict: bool | None = None,
+        pred_settings: dict | None = None,
         parent=None,
     ):
 
@@ -771,6 +816,9 @@ class PredictFilterWorker(BaseWorker):
         self.ch_names = ch_names
         self.models = models
         self.do_predict = do_predict
+        # Channel index -> preprocessing settings dict to apply to the raw image
+        # before prediction; channels absent from it are predicted on norm_img.
+        self.pred_settings = pred_settings or {}
 
     def compute(self):
 
@@ -782,8 +830,30 @@ class PredictFilterWorker(BaseWorker):
 
             # Perform prediction if do_predict
             if self.do_predict:
-                # Run StarDist
-                img = self.data[v]["norm_img"].astype(np.float32) / 255.0
+                # Run StarDist on norm_img (current settings), or on the raw image
+                # preprocessed with the model's default settings if chosen
+                pred = self.pred_settings.get(k)
+                if pred is not None:
+                    # Default settings may omit radius / percentiles when unused
+                    eff = workflow.effective_norm_settings(pred)
+                    img_u8 = workflow.normalize_img(
+                        img=self.data[v]["img"],
+                        background_subtraction=eff["background_subtraction"],
+                        radius=eff["radius"],
+                        use_robust_normalization=eff["robust_normalization"],
+                        low_pct=eff["low_pct"],
+                        high_pct=eff["high_pct"],
+                    )
+                    used = {**eff, "source": "default"}
+                else:
+                    img_u8 = self.data[v]["norm_img"]
+                    used = {
+                        **workflow.effective_norm_settings(
+                            {key: self.config["channels"][k][key] for key in _NORM_SETTING_KEYS}
+                        ),
+                        "source": "current",
+                    }
+                img = img_u8.astype(np.float32) / 255.0
                 n_tiles = workflow.choose_stardist_n_tiles(img)
                 with _silence_model_output():
                     msk = self.models[k].predict_instances(
@@ -817,6 +887,7 @@ class PredictFilterWorker(BaseWorker):
 
             # Record if filtered mask has changed
             if self.do_predict:
+                output[v]["prediction_settings_used"] = used
                 filt_msk_changed[v] = True
             else:
                 prev_filt_msk = self.data[v]["filt_msk"]
@@ -1087,6 +1158,13 @@ class PluginManager(QWidget):
         self._last_norm_settings = {}
         self._pending_predict = False
 
+        # Prediction preprocessing choice made when "Predict cells" was clicked:
+        # channel index -> default settings dict (channels not listed use norm_img),
+        # and a warning to show once prediction finishes.
+        self._prediction_override = {}
+        self._prediction_summary = None
+        self._prediction_warning = None
+
         # True while a background SaveResultsWorker is writing data.pkl/
         # metadata.pkl/config.json. Guards Clear/Edit ROIs/a second Save
         # programmatically (ignore the click + show a message) rather than by
@@ -1298,6 +1376,9 @@ class PluginManager(QWidget):
 
         self.workflow.channel_mismatch = False
         self._pending_predict = False
+        self._prediction_override = {}
+        self._prediction_summary = None
+        self._prediction_warning = None
         self._return_to_predict_after_model_change = False
 
         self._set_message(
@@ -1782,6 +1863,13 @@ class PluginManager(QWidget):
 
             btn.setEnabled(enabled)
 
+        # Re-enabling everything must not enable controls that are conditionally
+        # unavailable (clip-pct without robust normalization, default-settings
+        # box for a model without defaults).
+        if enabled:
+            self._sync_clip_pct_enabled()
+            self._sync_default_pred_enabled()
+
     def _destroy_ui_widgets(self, names):
         """Remove, hide and delete the named self.ui widgets, resetting each to None.
 
@@ -1886,10 +1974,10 @@ class PluginManager(QWidget):
             self.ui.btn_change_models = btn_change_models
             self.layout.insertWidget(0, btn_change_models)
 
-        # Add the grouped per-channel settings block (positions 1-12: header,
-        # bg-sub checkbox, radius, robust-norm checkbox, low/high clip-pct for
-        # ch0, then the same 6 widgets for ch1) above the action buttons
-        self._add_channel_settings_boxes(start=1)
+        # Add the grouped per-channel settings block (header, bg-sub checkbox,
+        # radius, robust-norm checkbox, low/high clip-pct, default-settings
+        # checkbox for ch0, then the same 7 widgets for ch1) above the action buttons
+        self._add_channel_settings_boxes(start=_CH_SETTINGS_START)
 
         # Add 'Load images', 'Predict cells' and 'Clear' buttons below the boxes
         btn_load = QPushButton("Load images")
@@ -1904,7 +1992,7 @@ class PluginManager(QWidget):
         btn_clear.clicked.connect(lambda checked=False: self._on_clear_clicked())
         self.ui.btn_clear = btn_clear
 
-        for i, j in zip([13, 14, 15], [btn_load, btn_predict, btn_clear]):
+        for i, j in zip([_LOAD_POS, _LOAD_POS + 1, _LOAD_POS + 2], [btn_load, btn_predict, btn_clear]):
 
             self.layout.insertWidget(i, j)
 
@@ -1970,10 +2058,20 @@ class PluginManager(QWidget):
             box_high_pct.setEnabled(ch_config["robust_normalization"])
             setattr(self.ui, f"box_high_pct_ch{i}", box_high_pct)
 
-            widgets.extend([lbl_header, chk_bg_sub, box_radius, chk_robust_norm, box_low_pct, box_high_pct])
+            # Ticked: predict with the model's default image preprocessing settings
+            # (config["prediction_settings"]); unticked: predict on norm_img, i.e.
+            # the current settings above. Never written back to self.config; resets
+            # to ticked whenever the panel is rebuilt.
+            chk_default_pred = QCheckBox("Predict with model's default settings")
+            chk_default_pred.setChecked(True)
+            setattr(self.ui, f"chk_default_pred_ch{i}", chk_default_pred)
+
+            widgets.extend([lbl_header, chk_bg_sub, box_radius, chk_robust_norm, box_low_pct, box_high_pct, chk_default_pred])
 
         for offset, w in enumerate(widgets):
             self.layout.insertWidget(start + offset, w)
+
+        self._sync_default_pred_enabled()
 
     def _add_min_area_boxes(self, insert_pos: int = 0):
 
@@ -2018,10 +2116,9 @@ class PluginManager(QWidget):
 
     def _set_predict_roi_ui(self, loaded_for_predict=False):
 
-        # Insert min-area boxes between "Reprocess images" (index 13) and "Predict
-        # cells" (index 14 before insertion). "Change models" is at 0, the grouped
-        # per-channel settings block at 1-12, "Reprocess images" at 13.
-        self._add_min_area_boxes(insert_pos=14)
+        # Insert min-area boxes between "Reprocess images" (_LOAD_POS) and "Predict
+        # cells" (_LOAD_POS + 1 before insertion).
+        self._add_min_area_boxes(insert_pos=_MIN_AREA_POS)
 
         if loaded_for_predict:
 
@@ -2045,6 +2142,8 @@ class PluginManager(QWidget):
                 self.ui.chk_bg_sub_ch1,
                 self.ui.box_bg_sub_radius_ch1,
                 self.ui.chk_robust_norm_ch1,
+                self.ui.chk_default_pred_ch0,
+                self.ui.chk_default_pred_ch1,
                 self.ui.box_low_pct_ch0,
                 self.ui.box_high_pct_ch0,
                 self.ui.box_low_pct_ch1,
@@ -2075,6 +2174,8 @@ class PluginManager(QWidget):
             "chk_bg_sub_ch1",
             "box_bg_sub_radius_ch1",
             "chk_robust_norm_ch1",
+            "chk_default_pred_ch0",
+            "chk_default_pred_ch1",
             "box_low_pct_ch0",
             "box_high_pct_ch0",
             "box_low_pct_ch1",
@@ -2308,6 +2409,10 @@ class PluginManager(QWidget):
                 "chk_bg_sub_ch1",
                 "box_bg_sub_radius_ch1",
                 "chk_robust_norm_ch1",
+                "chk_default_pred_ch0",
+                "chk_default_pred_ch1",
+            "chk_default_pred_ch0",
+            "chk_default_pred_ch1",
                 "box_low_pct_ch0",
                 "box_high_pct_ch0",
                 "box_low_pct_ch1",
@@ -2510,6 +2615,8 @@ class PluginManager(QWidget):
             "chk_bg_sub_ch1",
             "box_bg_sub_radius_ch1",
             "chk_robust_norm_ch1",
+            "chk_default_pred_ch0",
+            "chk_default_pred_ch1",
             "box_low_pct_ch0",
             "box_high_pct_ch0",
             "box_low_pct_ch1",
@@ -2526,6 +2633,9 @@ class PluginManager(QWidget):
         ])
 
         self._set_workflow_state(WorkflowState.SELECT_MODEL)
+
+        # Drop the previous step's message (e.g. "Prediction finished")
+        self._set_message("", MessageLevel.NONE)
 
     def _on_load_models_clicked(self):
 
@@ -2630,6 +2740,10 @@ class PluginManager(QWidget):
         self._manual_selections.clear()
 
         self._tube_match_warning = None
+
+        self._prediction_override = {}
+        self._prediction_summary = None
+        self._prediction_warning = None
 
         self._last_norm_settings.clear()
 
@@ -2737,7 +2851,70 @@ class PluginManager(QWidget):
                 self.layers[k]["image"].reset_contrast_limits_range()
                 self.layers[k]["image"].reset_contrast_limits()
 
+    def _set_prediction_settings(self):
+        """Decide which image preprocessing settings each channel's prediction uses.
+
+        A channel is predicted with its model's default settings
+        (config["prediction_settings"]) when its "Predict with model's default
+        settings" box is ticked and the defaults differ from the current ones;
+        otherwise on norm_img (current settings). Sets self._prediction_override,
+        self._prediction_summary and self._prediction_warning.
+        """
+
+        defaults = self.config["prediction_settings"]
+        override = {}
+        summary = []
+        missing = []
+
+        for i in [0, 1]:
+
+            ch = self.config["channels"][i]
+            model = ch["stardist_model"]
+            current = {k: ch[k] for k in _NORM_SETTING_KEYS}
+            default = defaults.get(model)
+            chk = getattr(self.ui, f"chk_default_pred_ch{i}", None)
+
+            if default is None:
+                missing.append((i, model))
+                source, used = "current settings", current
+            elif (chk is None or chk.isChecked()) and workflow.effective_norm_settings(
+                default
+            ) != workflow.effective_norm_settings(current):
+                override[i] = dict(default)
+                source, used = "model default settings", default
+            else:
+                source, used = "current settings", current
+
+            summary.append(
+                f"{ch['name']}: {source}\n{_describe_norm_settings(used)}\n"
+            )
+
+        warning = None
+
+        if len(missing) == 2:
+            warning = (
+                "Models have no default image preprocessing settings. Current settings were used for prediction."
+            )
+        elif missing:
+            i, model = missing[0]
+            warning = (
+                f"Model '{model}' (channel {i}) has no default image preprocessing settings. Current settings were used for prediction."
+            )
+
+        self._prediction_override = override
+        self._prediction_summary = "\n".join(summary)
+        self._prediction_warning = warning
+
+        if warning is not None:
+            _safe_print(f"Warning: {warning}")
+
     def _on_predict_clicked(self):
+
+        if self.state.workflow_state in (
+            WorkflowState.LOAD_IMAGE,
+            WorkflowState.PREDICT_ROI,
+        ):
+            self._set_prediction_settings()
 
         # Trigger load worker thread if 'Predict cells' button was clicked directly
         if self.state.workflow_state == WorkflowState.LOAD_IMAGE:
@@ -2870,6 +3047,7 @@ class PluginManager(QWidget):
                 self.workflow.ch_names,
                 self.models,
                 do_predict,
+                dict(self._prediction_override),
             ),
             success_handler=self._on_predict_filter_finished,
             thread_attr_name="_predict_filter_worker_thread",
@@ -2945,20 +3123,29 @@ class PluginManager(QWidget):
 
         self._set_workflow_state(state=WorkflowState.APPLY_EDITS)
 
-        self._set_message(
-            "Prediction finished",
-            MessageLevel.CHECK,
-        )
+        # Report which preprocessing settings each channel was predicted with
+        # (only set when this finish follows a prediction, not a size-filter run)
+        message = "Prediction finished"
+
+        if self._prediction_summary is not None:
+            message += f"\n\n{self._prediction_summary}"
+            self._prediction_summary = None
+
+        if self._prediction_warning is not None:
+            message += f"\n\n⚠ {self._prediction_warning}"
+            self._prediction_warning = None
+
+        self._set_message(message, MessageLevel.CHECK)
 
     def _rebuild_predict_roi_panel(self, add_change_models: bool = False):
         """Rebuild the PREDICT_ROI widget panel from a blank layout.
 
         Layout after rebuild:
           0: btn_change_models (created here when add_change_models=True, else already present)
-          1-12: grouped per-channel settings block (see _add_channel_settings_boxes)
-          13: Reprocess images button
-          14-15: min-area boxes
-          16: Predict cells button
+          1-14: grouped per-channel settings block (see _add_channel_settings_boxes)
+          15: Reprocess images button
+          16-17: min-area boxes
+          18: Predict cells button
           (+ btn_clear already at end)
         """
         if add_change_models:
@@ -2967,21 +3154,21 @@ class PluginManager(QWidget):
             self.ui.btn_change_models = btn_change_models
             self.layout.insertWidget(0, btn_change_models)
 
-        self._add_channel_settings_boxes(start=1)
+        self._add_channel_settings_boxes(start=_CH_SETTINGS_START)
         self._update_clip_pct_box_labels()
         self._sync_clip_pct_enabled()
 
         btn_load = QPushButton("Reprocess images")
         btn_load.clicked.connect(self._on_reload_clicked)
         self.ui.btn_load = btn_load
-        self.layout.insertWidget(13, btn_load)
+        self.layout.insertWidget(_LOAD_POS, btn_load)
 
-        self._add_min_area_boxes(insert_pos=14)
+        self._add_min_area_boxes(insert_pos=_MIN_AREA_POS)
 
         btn_predict = QPushButton("Predict cells")
         btn_predict.clicked.connect(self._on_predict_clicked)
         self.ui.btn_predict = btn_predict
-        self.layout.insertWidget(16, btn_predict)
+        self.layout.insertWidget(_PREDICT_POS, btn_predict)
 
         self._set_viewer_state(ViewerState.IMAGE_LOADED)
         self.state.workflow_state = WorkflowState.PREDICT_ROI
@@ -3217,6 +3404,7 @@ class PluginManager(QWidget):
             "cnts",
             "roi_status_data",
             "collection_summary",
+            "prediction_settings_used",
         )
 
         ch0_nm = self.workflow.ch_names[0]
@@ -3618,6 +3806,28 @@ class PluginManager(QWidget):
             box = getattr(self.ui, attr, None)
             if box is not None:
                 box.setEnabled(checked)
+
+    def _sync_default_pred_enabled(self):
+        """Enable each channel's "Predict with model's default settings" box only
+        if its model has default settings in config["prediction_settings"];
+        otherwise untick and grey it out. The tooltip shows the defaults."""
+
+        for i in [0, 1]:
+            chk = getattr(self.ui, f"chk_default_pred_ch{i}", None)
+            if chk is None:
+                continue
+            model = self.config["channels"][i]["stardist_model"]
+            default = self.config["prediction_settings"].get(model)
+            if default is None:
+                chk.setChecked(False)
+                chk.setEnabled(False)
+                chk.setToolTip(
+                    f"Model '{model}' has no default settings in the config "
+                    "(prediction_settings): the current settings are used."
+                )
+            else:
+                chk.setEnabled(True)
+                chk.setToolTip(f"Model '{model}' default: {_describe_norm_settings(default)}")
 
     def _sync_clip_pct_enabled(self):
         """Enable/disable each channel's clip-pct boxes to match its current

@@ -95,6 +95,64 @@ class TubeIdSetWidget(QGroupBox):
         }
 
 
+# %% PredictionSettingsEntryWidget() ----
+
+
+class PredictionSettingsEntryWidget(QGroupBox):
+    """One prediction_settings entry: a model name + its image preprocessing settings."""
+
+    def __init__(self, model_options: list, model_name: str, settings: dict):
+
+        super().__init__()
+
+        layout = QVBoxLayout(self)
+
+        # Model name (editable, so settings can be kept for models that are not
+        # installed on this machine) + remove button on the top row
+        top_row = QHBoxLayout()
+        top_row.addWidget(QLabel("model"))
+        self.combo_model = QComboBox()
+        self.combo_model.setEditable(True)
+        self.combo_model.addItems(model_options)
+        self.combo_model.setCurrentText(model_name)
+        top_row.addWidget(self.combo_model, stretch=1)
+        self.btn_remove = QPushButton("Remove")
+        top_row.addWidget(self.btn_remove)
+        layout.addLayout(top_row)
+
+        form = QFormLayout()
+        self.chk_bg_sub = QCheckBox()
+        self.chk_bg_sub.setChecked(bool(settings.get("background_subtraction", False)))
+        self.spin_radius = QDoubleSpinBox()
+        self.spin_radius.setRange(1.0, 1000.0)
+        self.spin_radius.setDecimals(0)
+        self.spin_radius.setValue(float(settings.get("radius", 50)))
+        self.chk_robust = QCheckBox()
+        self.chk_robust.setChecked(bool(settings.get("robust_normalization", True)))
+        self.spin_low = _percent_spin(settings.get("low_pct", 0.05))
+        self.spin_high = _percent_spin(settings.get("high_pct", 99.95))
+        form.addRow("background subtraction", self.chk_bg_sub)
+        form.addRow("background subtraction radius (px)", self.spin_radius)
+        form.addRow("robust normalization", self.chk_robust)
+        form.addRow("low percentile", self.spin_low)
+        form.addRow("high percentile", self.spin_high)
+        layout.addLayout(form)
+
+    def model_name(self) -> str:
+
+        return self.combo_model.currentText().strip()
+
+    def value(self) -> dict:
+
+        return {
+            "background_subtraction": self.chk_bg_sub.isChecked(),
+            "radius": self.spin_radius.value(),
+            "robust_normalization": self.chk_robust.isChecked(),
+            "low_pct": self.spin_low.value(),
+            "high_pct": self.spin_high.value(),
+        }
+
+
 # %% ConfigEditor() ----
 
 
@@ -132,6 +190,7 @@ class ConfigEditor(QDialog):
         tabs.addTab(self._build_channels_tab(), "Channels")
         tabs.addTab(self._build_elements_tab(), "Elements")
         tabs.addTab(self._build_annotation_tab(), "Annotation")
+        tabs.addTab(self._build_prediction_settings_tab(), "Prediction settings")
         layout.addWidget(tabs)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
@@ -313,10 +372,18 @@ class ConfigEditor(QDialog):
             box = QGroupBox(f"Channel {key}")
             form = QFormLayout(box)
             w = {
+                "background_subtraction": QCheckBox(),
+                "radius": self._radius_spin(ann["radius"]),
+                "robust_normalization": QCheckBox(),
                 "low_pct": _percent_spin(ann["low_pct"]),
                 "high_pct": _percent_spin(ann["high_pct"]),
                 "color": _combo(self._channel_colors, ann["color"]),
             }
+            w["background_subtraction"].setChecked(bool(ann["background_subtraction"]))
+            w["robust_normalization"].setChecked(bool(ann["robust_normalization"]))
+            form.addRow("background subtraction", w["background_subtraction"])
+            form.addRow("background subtraction radius (px)", w["radius"])
+            form.addRow("robust normalization", w["robust_normalization"])
             form.addRow("low percentile", w["low_pct"])
             form.addRow("high percentile", w["high_pct"])
             form.addRow("color", w["color"])
@@ -326,6 +393,52 @@ class ConfigEditor(QDialog):
         page_layout.addStretch()
 
         return self._scrollable(page)
+
+    def _build_prediction_settings_tab(self) -> QWidget:
+
+        page = QWidget()
+        page_layout = QVBoxLayout(page)
+
+        page_layout.addWidget(
+            QLabel(
+                "Image preprocessing settings each StarDist model was trained with. "
+                "When 'Predict cells' is clicked with different current settings, "
+                "you can choose to predict with these defaults instead."
+            )
+        )
+        page_layout.itemAt(0).widget().setWordWrap(True)
+
+        self._pred_layout = QVBoxLayout()
+        page_layout.addLayout(self._pred_layout)
+
+        self._pred_widgets = []
+        for model_nm, settings in self.config["prediction_settings"].items():
+            self._add_pred_widget(model_nm, settings)
+
+        btn_add = QPushButton("Add model")
+        btn_add.clicked.connect(lambda: self._add_pred_widget("", {}))
+        page_layout.addWidget(btn_add)
+
+        page_layout.addStretch()
+
+        return self._scrollable(page)
+
+    def _add_pred_widget(self, model_name: str, settings: dict) -> None:
+
+        widget = PredictionSettingsEntryWidget(
+            model_options=self._model_options,
+            model_name=model_name,
+            settings=settings,
+        )
+        widget.btn_remove.clicked.connect(lambda: self._remove_pred_widget(widget))
+        self._pred_widgets.append(widget)
+        self._pred_layout.addWidget(widget)
+
+    def _remove_pred_widget(self, widget: PredictionSettingsEntryWidget) -> None:
+
+        self._pred_widgets.remove(widget)
+        self._pred_layout.removeWidget(widget)
+        widget.deleteLater()
 
     # -- Helpers ----------------------------------------------------------
 
@@ -430,6 +543,9 @@ class ConfigEditor(QDialog):
         for key in sorted(self.config["channels_annotation"].keys()):
             w = self._annotation_widgets[key]
             channels_annotation[str(key)] = {
+                "background_subtraction": w["background_subtraction"].isChecked(),
+                "radius": w["radius"].value(),
+                "robust_normalization": w["robust_normalization"].isChecked(),
                 "low_pct": w["low_pct"].value(),
                 "high_pct": w["high_pct"].value(),
                 "color": w["color"].currentText(),
@@ -443,11 +559,26 @@ class ConfigEditor(QDialog):
             "min_pct_ovl_ch1_by_ch0": self.spin_ovl_1by0.value(),
             "elements": elements,
             "channels_annotation": channels_annotation,
+            "prediction_settings": {
+                w.model_name(): w.value() for w in self._pred_widgets
+            },
         }
 
     def _on_save(self) -> None:
 
         config = self._collect_config()
+
+        pred_names = [w.model_name() for w in self._pred_widgets]
+
+        if "" in pred_names or len(set(pred_names)) != len(pred_names):
+
+            QMessageBox.critical(
+                self,
+                "Invalid configuration",
+                "Prediction settings: each entry needs a distinct, non-empty model name.",
+            )
+
+            return
 
         try:
 

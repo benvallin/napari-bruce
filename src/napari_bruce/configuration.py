@@ -9,6 +9,68 @@ import shutil
 from pathlib import Path
 from importlib.metadata import version, PackageNotFoundError
 
+# %% _get_desktop_path() ----
+
+
+def _get_desktop_path() -> Path:
+    """Best-effort path to the user's Desktop directory, cross-platform.
+
+    Asks the OS where the Desktop is (it can be redirected, e.g. by OneDrive on
+    Windows, or localized / relocated on Linux) and falls back to ~/Desktop, then
+    to the home directory if no Desktop is reachable.
+
+    Returns:
+      Path: path to the Desktop directory, or to the home directory as fallback.
+
+    """
+
+    home = Path.home()
+
+    if sys.platform == "win32":
+
+        try:
+
+            import ctypes
+
+            # FOLDERID_Desktop = {B4BFCC3A-DB2C-424C-B029-7FE99A87C641}
+            guid = (ctypes.c_ubyte * 16)(
+                0x3A, 0xCC, 0xBF, 0xB4, 0x2C, 0xDB, 0x4C, 0x42,
+                0xB0, 0x29, 0x7F, 0xE9, 0x9A, 0x87, 0xC6, 0x41,
+            )
+            buf = ctypes.c_wchar_p()
+            ctypes.windll.shell32.SHGetKnownFolderPath(
+                ctypes.byref(guid), 0, None, ctypes.byref(buf)
+            )
+            path = Path(buf.value)
+            ctypes.windll.ole32.CoTaskMemFree(buf)
+
+            if path.is_dir():
+                return path
+
+        except Exception:
+
+            pass
+
+    elif sys.platform.startswith("linux"):
+
+        try:
+
+            out = subprocess.run(
+                ["xdg-user-dir", "DESKTOP"], capture_output=True, text=True, timeout=2
+            ).stdout.strip()
+
+            if out and Path(out).is_dir():
+                return Path(out)
+
+        except Exception:
+
+            pass
+
+    desktop = home / "Desktop"
+
+    return desktop if desktop.is_dir() else home
+
+
 # %% get_config_file_path() ----
 
 
@@ -219,6 +281,7 @@ def check_config_integrity(config: dict) -> None:
         "min_pct_ovl_ch1_by_ch0": (int, float),
         "elements": dict,
         "channels_annotation": dict,
+        "prediction_settings": dict,
     }
 
     exp_ch_kv = {"0": dict, "1": dict}
@@ -261,9 +324,26 @@ def check_config_integrity(config: dict) -> None:
     exp_ch_annot_kv = {"0": dict, "1": dict}
 
     exp_subch_annot_kv = {
+        "background_subtraction": bool,
+        "radius": (int, float),
+        "robust_normalization": bool,
         "low_pct": (int, float),
         "high_pct": (int, float),
         "color": str,
+    }
+
+    # 'radius' is only required when background_subtraction is on, and
+    # 'low_pct' / 'high_pct' only when robust_normalization is on; when present
+    # they are still type- and range-checked.
+    exp_pred_settings_kv = {
+        "background_subtraction": bool,
+        "robust_normalization": bool,
+    }
+
+    opt_pred_settings_kv = {
+        "radius": (int, float),
+        "low_pct": (int, float),
+        "high_pct": (int, float),
     }
 
     check_dict_kv(exp_kv=exp_main_kv, in_dict=config, dict_nm="config main")
@@ -312,7 +392,9 @@ def check_config_integrity(config: dict) -> None:
 
         if not (config["channels"][i]["radius"] > 0):
 
-            raise ConfigError(f"config['channels']['{i}']['radius'] must be greater than 0.")
+            raise ConfigError(
+                f"config['channels']['{i}']['radius'] must be greater than 0."
+            )
 
     check_dict_kv(
         exp_kv=exp_elem_kv, in_dict=config["elements"], dict_nm="config elements"
@@ -440,6 +522,62 @@ def check_config_integrity(config: dict) -> None:
                     f"config['channels_annotation']['{i}']['{j}'] must be between 0 and 100."
                 )
 
+        if not (config["channels_annotation"][i]["radius"] > 0):
+
+            raise ConfigError(
+                f"config['channels_annotation']['{i}']['radius'] must be greater than 0."
+            )
+
+    # Default image preprocessing settings per StarDist model (the settings the
+    # model was trained with). Keys are model names; they are deliberately not
+    # checked against the available models, which differ between machines.
+    for model_nm in config["prediction_settings"].keys():
+
+        entry = config["prediction_settings"][model_nm]
+
+        check_dict_kv(
+            exp_kv=exp_pred_settings_kv,
+            in_dict=entry,
+            dict_nm=f"config prediction_settings '{model_nm}'",
+        )
+
+        required = {}
+
+        if entry["background_subtraction"]:
+            required["radius"] = opt_pred_settings_kv["radius"]
+
+        if entry["robust_normalization"]:
+            required["low_pct"] = opt_pred_settings_kv["low_pct"]
+            required["high_pct"] = opt_pred_settings_kv["high_pct"]
+
+        check_dict_kv(
+            exp_kv=required,
+            in_dict=entry,
+            dict_nm=f"config prediction_settings '{model_nm}'",
+        )
+
+        present = {k: v for k, v in opt_pred_settings_kv.items() if k in entry}
+
+        check_dict_kv(
+            exp_kv=present,
+            in_dict=entry,
+            dict_nm=f"config prediction_settings '{model_nm}'",
+        )
+
+        for j in ["low_pct", "high_pct"]:
+
+            if j in entry and not (0 <= entry[j] <= 100):
+
+                raise ConfigError(
+                    f"config['prediction_settings']['{model_nm}']['{j}'] must be between 0 and 100."
+                )
+
+        if "radius" in entry and not (entry["radius"] > 0):
+
+            raise ConfigError(
+                f"config['prediction_settings']['{model_nm}']['radius'] must be greater than 0."
+            )
+
     return
 
 
@@ -494,7 +632,7 @@ def make_default_config() -> dict:
 
     in_dir_path = str(Path.home())
 
-    out_dir_path = str(os.path.join(in_dir_path, "napari_bruce_results"))
+    out_dir_path = str(Path(_get_desktop_path(), "napari_bruce_results"))
 
     output = {
         "in_dir_path": in_dir_path,
@@ -565,7 +703,7 @@ def make_default_config() -> dict:
             # (case-insensitive substring) in the loaded image file name
             # overrides the per-population 'tube_id' defaults above.
             "tube_id_matching": {
-                "enabled": True,
+                "enabled": False,
                 "sets": [
                     {
                         "match": "-l-",
@@ -592,14 +730,46 @@ def make_default_config() -> dict:
         },
         "channels_annotation": {
             0: {
+                "background_subtraction": False,
+                "radius": 50,
+                "robust_normalization": True,
                 "low_pct": 0.0500,
                 "high_pct": 99.9500,
                 "color": "purple",
             },
             1: {
+                "background_subtraction": False,
+                "radius": 50,
+                "robust_normalization": True,
                 "low_pct": 1.0000,
                 "high_pct": 99.9990,
                 "color": "cyan",
+            },
+        },
+        "prediction_settings": {
+            "2026.04.21-06.10_stardist_th_cam": {
+                "background_subtraction": False,
+                "robust_normalization": True,
+                "low_pct": 0.05,
+                "high_pct": 99.95,
+            },
+            "2026.04.21-06.10_stardist_psyn_cam": {
+                "background_subtraction": False,
+                "robust_normalization": True,
+                "low_pct": 0.05,
+                "high_pct": 99.9999,
+            },
+            "2026.04.21_stardist_th_cam": {
+                "background_subtraction": False,
+                "robust_normalization": True,
+                "low_pct": 0.05,
+                "high_pct": 99.95,
+            },
+            "2026.04.21_stardist_psyn_cam": {
+                "background_subtraction": False,
+                "robust_normalization": True,
+                "low_pct": 0.05,
+                "high_pct": 99.9999,
             },
         },
     }

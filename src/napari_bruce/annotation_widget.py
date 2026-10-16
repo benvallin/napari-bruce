@@ -10,6 +10,7 @@ from enum import Enum
 from qtpy.QtCore import QEvent, QObject, QThread, Qt, Signal
 from qtpy.QtWidgets import (
     QApplication,
+    QCheckBox,
     QHBoxLayout,
     QLabel,
     QMessageBox,
@@ -22,12 +23,20 @@ from qtpy.QtWidgets import (
 
 from . import workflow
 from . import configuration
+from .main_widget import ParamValueBox
 
-# Get channel-specific ROI colors from configuration
+# Get channel-specific ROI colors and default normalization settings from configuration
 config = configuration.get_config()
 CHANNEL_COLORS = [
     config["channels_annotation"][i]["color"]
     for i in sorted(config["channels_annotation"].keys())
+]
+NORM_SETTING_KEYS = [
+    "background_subtraction",
+    "radius",
+    "robust_normalization",
+    "low_pct",
+    "high_pct",
 ]
 
 # %% MessageLevel ----
@@ -201,6 +210,12 @@ class AnnotationManager(QWidget):
         self.img_layers = []
         self.shape_layers = []
 
+        # Live normalization settings per channel index. Reset to the config
+        # defaults every time an image is loaded; edited via the settings block
+        # and applied to the displayed image by "Reprocess images".
+        self._norm_settings = {}
+        self._settings_widgets = {}
+
         self._unsaved_changes = False
         self._loading = False
         self._saving = False
@@ -258,6 +273,10 @@ class AnnotationManager(QWidget):
         nav_row.addWidget(self.btn_prev)
         nav_row.addWidget(self.btn_next)
 
+        self.btn_reprocess = QPushButton("Reprocess images")
+        self.btn_reprocess.clicked.connect(self._on_reprocess_clicked)
+        self.btn_reprocess.setEnabled(False)
+
         self.btn_save = QPushButton("Save")
         self.btn_save.clicked.connect(self._on_save_clicked)
         self.btn_save.setEnabled(False)
@@ -282,6 +301,8 @@ class AnnotationManager(QWidget):
         layout = QVBoxLayout()
         layout.addWidget(self.lbl_counter)
         layout.addLayout(nav_row)
+        self._add_norm_settings_boxes(layout)
+        layout.addWidget(self.btn_reprocess)
         layout.addWidget(self.btn_save)
         layout.addWidget(self.msg_container)
 
@@ -289,6 +310,128 @@ class AnnotationManager(QWidget):
         self.setMinimumWidth(300)
         self.setMaximumWidth(1000)
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+
+    def _add_norm_settings_boxes(self, layout: QVBoxLayout):
+        """Add the per-channel background-subtraction / robust-normalization controls.
+
+        Mirrors the main widget: for each channel, a bold colored header, the
+        background-subtraction checkbox + radius box, the robust-normalization
+        checkbox, then the low/high clip-pct boxes.
+        """
+
+        for i in sorted(config["channels_annotation"].keys()):
+
+            ch_config = config["channels_annotation"][i]
+
+            lbl_header = QLabel(f"Channel {i}")
+            lbl_header.setStyleSheet(f"font-weight: bold; color: {ch_config['color']};")
+
+            chk_bg_sub = QCheckBox("Background subtraction")
+            chk_bg_sub.toggled.connect(
+                lambda checked, ch=i: self._on_norm_setting_changed(
+                    ch, "background_subtraction", bool(checked)
+                )
+            )
+
+            box_radius = ParamValueBox(
+                label="radius (px)", default=ch_config["radius"], min_val=1, max_val=1000
+            )
+            box_radius.valueChanged.connect(
+                lambda x, ch=i: self._on_norm_setting_changed(ch, "radius", float(x))
+            )
+
+            chk_robust_norm = QCheckBox("Robust normalization")
+            chk_robust_norm.toggled.connect(
+                lambda checked, ch=i: self._on_norm_setting_changed(
+                    ch, "robust_normalization", bool(checked)
+                )
+            )
+
+            box_low_pct = ParamValueBox(
+                label="low % clip",
+                default=ch_config["low_pct"],
+                min_val=0.0,
+                max_val=100.0,
+                decimals=4,
+            )
+            box_low_pct.valueChanged.connect(
+                lambda x, ch=i: self._on_norm_setting_changed(ch, "low_pct", float(x))
+            )
+
+            box_high_pct = ParamValueBox(
+                label="high % clip",
+                default=ch_config["high_pct"],
+                min_val=0.0,
+                max_val=100.0,
+                decimals=4,
+            )
+            box_high_pct.valueChanged.connect(
+                lambda x, ch=i: self._on_norm_setting_changed(ch, "high_pct", float(x))
+            )
+
+            widgets = [lbl_header, chk_bg_sub, box_radius, chk_robust_norm, box_low_pct, box_high_pct]
+
+            for w in widgets:
+                layout.addWidget(w)
+
+            self._settings_widgets[i] = {
+                "header": lbl_header,
+                "background_subtraction": chk_bg_sub,
+                "radius": box_radius,
+                "robust_normalization": chk_robust_norm,
+                "low_pct": box_low_pct,
+                "high_pct": box_high_pct,
+                "all": widgets,
+            }
+
+            self._norm_settings[i] = {}
+
+        self._reset_norm_settings()
+
+    def _on_norm_setting_changed(self, ch_idx: int, key: str, value):
+
+        self._norm_settings[ch_idx][key] = value
+
+        # Clip-pct only has an effect when robust normalization is on.
+        if key == "robust_normalization":
+
+            w = self._settings_widgets[ch_idx]
+            w["low_pct"].setEnabled(value)
+            w["high_pct"].setEnabled(value)
+
+    def _reset_norm_settings(self):
+        """Reapply the config defaults to the live settings and the controls."""
+
+        for i, w in self._settings_widgets.items():
+
+            defaults = config["channels_annotation"][i]
+
+            for key in NORM_SETTING_KEYS:
+
+                self._norm_settings[i][key] = defaults[key]
+
+            w["background_subtraction"].setChecked(defaults["background_subtraction"])
+            w["radius"].setValue(defaults["radius"])
+            w["robust_normalization"].setChecked(defaults["robust_normalization"])
+            w["low_pct"].setValue(defaults["low_pct"])
+            w["high_pct"].setValue(defaults["high_pct"])
+            w["low_pct"].setEnabled(defaults["robust_normalization"])
+            w["high_pct"].setEnabled(defaults["robust_normalization"])
+
+    def _normalize_channel(self, ch_idx: int, data: dict) -> np.ndarray:
+        """Normalized display image for a channel, computed from the raw image
+        under the live settings."""
+
+        s = self._norm_settings[ch_idx]
+
+        return workflow.normalize_img(
+            img=data["img"],
+            background_subtraction=s["background_subtraction"],
+            radius=s["radius"],
+            use_robust_normalization=s["robust_normalization"],
+            low_pct=s["low_pct"],
+            high_pct=s["high_pct"],
+        )
 
     def _update_counter(self):
 
@@ -342,6 +485,7 @@ class AnnotationManager(QWidget):
 
         self._load_image(0)
 
+        self.btn_reprocess.setEnabled(True)
         self.btn_save.setEnabled(True)
 
     def _on_load_error(self, error_msg: str):
@@ -398,6 +542,17 @@ class AnnotationManager(QWidget):
 
         self._loading = True
 
+        # Settings changed on the previous image do not carry over
+        self._reset_norm_settings()
+
+        for i, w in self._settings_widgets.items():
+
+            for widget in w["all"]:
+                widget.setVisible(i < n_ch)
+
+            if i < n_ch:
+                w["header"].setText(f"Channel {i}: {ch_names_data[i]}")
+
         with self.viewer.layers.events.blocker():
 
             if len(self.img_layers) != n_ch:
@@ -416,7 +571,7 @@ class AnnotationManager(QWidget):
                 data = fn_data[cn]
                 col = CHANNEL_COLORS[i % len(CHANNEL_COLORS)]
 
-                self.img_layers[i].data = data["norm_img"]
+                self.img_layers[i].data = self._normalize_channel(i, data)
                 self.img_layers[i].name = f"{cn} - image"
                 self.img_layers[i].reset_contrast_limits()
                 self.img_layers[i].visible = True
@@ -459,6 +614,14 @@ class AnnotationManager(QWidget):
         fn = self.img_keys[self.idx]
         fn_data = self.imgs[fn]["data"]
 
+        # Record the preprocessing settings the image was annotated under, by
+        # channel name, so a model trained on these annotations can reproduce
+        # the same normalization from the raw img.
+        self.imgs[fn]["channels_annotation"] = {
+            cn: {k: self._norm_settings[i][k] for k in NORM_SETTING_KEYS}
+            for i, cn in enumerate(fn_data.keys())
+        }
+
         for i, cn in enumerate(fn_data.keys()):
 
             layer = self.shape_layers[i]
@@ -499,6 +662,16 @@ class AnnotationManager(QWidget):
             self.msg_icon.setVisible(True)
 
     # %% Button handlers ----
+
+    def _on_reprocess_clicked(self):
+        """Recompute the displayed images of the current image with the live settings."""
+
+        fn_data = self.imgs[self.img_keys[self.idx]]["data"]
+
+        for i, cn in enumerate(fn_data.keys()):
+
+            self.img_layers[i].data = self._normalize_channel(i, fn_data[cn])
+            self.img_layers[i].reset_contrast_limits()
 
     def _on_prev_clicked(self):
 
@@ -623,20 +796,26 @@ def validate_annotation_inputs(in_dir_path: str, out_dir_path: str) -> None:
                 f"{pkl_path}: 'data' for entry '{fn}' must be a non-empty dict."
             )
 
+        n_cfg_ch = len(config["channels_annotation"])
+
+        if len(ch_data) > n_cfg_ch:
+            raise ValueError(
+                f"{pkl_path}: entry '{fn}' has {len(ch_data)} channels but "
+                f"config['channels_annotation'] defines {n_cfg_ch}."
+            )
+
         for ch, ch_entry in ch_data.items():
 
-            for key in ("norm_img", "img"):
+            if "img" not in ch_entry:
+                raise ValueError(
+                    f"{pkl_path}: entry '{fn}', channel '{ch}' is missing 'img'."
+                )
 
-                if key not in ch_entry:
-                    raise ValueError(
-                        f"{pkl_path}: entry '{fn}', channel '{ch}' is missing '{key}'."
-                    )
-
-                if not isinstance(ch_entry[key], np.ndarray):
-                    raise ValueError(
-                        f"{pkl_path}: entry '{fn}', channel '{ch}': "
-                        f"'{key}' must be a numpy array, got {type(ch_entry[key]).__name__}."
-                    )
+            if not isinstance(ch_entry["img"], np.ndarray):
+                raise ValueError(
+                    f"{pkl_path}: entry '{fn}', channel '{ch}': "
+                    f"'img' must be a numpy array, got {type(ch_entry['img']).__name__}."
+                )
 
 
 # %% launch_annotation_viewer() ----
