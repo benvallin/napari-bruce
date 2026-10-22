@@ -1097,10 +1097,10 @@ class SaveResultsWorker(BaseWorker):
         return {}
 
 
-# %% _make_color_overlay_delegate() ----
+# %% make_color_overlay_delegate() ----
 
 
-def _make_color_overlay_delegate(base_cls):
+def make_color_overlay_delegate(base_cls):
 
     class ColorOverlayDelegate(base_cls):
 
@@ -1221,7 +1221,7 @@ class PluginManager(QWidget):
         if qt_list is None:
             return
 
-        DelegateClass = _make_color_overlay_delegate(type(qt_list.itemDelegate()))
+        DelegateClass = make_color_overlay_delegate(type(qt_list.itemDelegate()))
         self._layer_delegate = DelegateClass(self._build_layer_colors())
         qt_list.setItemDelegate(self._layer_delegate)
         if hasattr(self._layer_delegate, "loading_frame_changed"):
@@ -1543,7 +1543,7 @@ class PluginManager(QWidget):
                     name=f"\u25b6 add ch{i}",
                     shape_type="path",
                     edge_color=self.config["channels"][i]["color"],
-                    edge_width=6,
+                    edge_width=2,
                     visible=False,
                 )
 

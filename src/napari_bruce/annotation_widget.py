@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 from enum import Enum
 from qtpy.QtCore import QEvent, QObject, QThread, Qt, Signal
+from qtpy.QtGui import QColor
 from qtpy.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -23,7 +24,7 @@ from qtpy.QtWidgets import (
 
 from . import workflow
 from . import configuration
-from .main_widget import ParamValueBox
+from .main_widget import ParamValueBox, make_color_overlay_delegate
 
 # Get channel-specific ROI colors and default normalization settings from configuration
 config = configuration.get_config()
@@ -225,6 +226,9 @@ class AnnotationManager(QWidget):
         self.viewer.window._qt_window.installEventFilter(self._close_filter)
 
         self._build_layout()
+        self._install_layer_colors()
+        self._install_layer_delete_guard()
+        self._remove_layer_buttons()
         self._start_load_thread()
 
     def closeEvent(self, event):
@@ -494,6 +498,128 @@ class AnnotationManager(QWidget):
 
     # %% Viewer layers ----
 
+    # Layer-control properties the user can change via napari's "layer controls"
+    # panel. Snapshotted when the layers are created and restored on every image
+    # load so each image starts from identical defaults. (Image contrast_limits
+    # is excluded: it is re-fitted from the data on load. Shapes edge_width is
+    # per-shape, so only the "current" value is restored.)
+    _IMAGE_CONTROLS = ("opacity", "gamma", "colormap", "blending", "interpolation2d")
+    _SHAPES_CONTROLS = (
+        "opacity",
+        "blending",
+        "current_edge_width",
+        "current_edge_color",
+        "current_face_color",
+    )
+
+    def _iter_control_specs(self):
+        for layer in self.img_layers:
+            yield layer, self._IMAGE_CONTROLS
+        for layer in self.shape_layers:
+            yield layer, self._SHAPES_CONTROLS
+
+    def _snapshot_layer_controls(self):
+        self._layer_control_defaults = []
+        for layer, names in self._iter_control_specs():
+            snap = {}
+            for name in names:
+                if not hasattr(layer, name):
+                    continue
+                value = getattr(layer, name)
+                if isinstance(value, (list, np.ndarray)):
+                    value = np.array(value, copy=True)
+                snap[name] = value
+            self._layer_control_defaults.append((layer, snap))
+
+    def _restore_layer_controls(self):
+        for layer, snap in self._layer_control_defaults:
+            for name, value in snap.items():
+                try:
+                    setattr(layer, name, value)
+                except Exception:
+                    # Tolerate napari version differences in control setters;
+                    # a single failed control must not abort the image load.
+                    pass
+
+    def _install_layer_colors(self):
+        qt_list = next(
+            (
+                w
+                for w in QApplication.instance().allWidgets()
+                if type(w).__name__ == "QtLayerList"
+            ),
+            None,
+        )
+        if qt_list is None:
+            return
+
+        DelegateClass = make_color_overlay_delegate(type(qt_list.itemDelegate()))
+        self._qt_layer_list = qt_list
+        self._layer_delegate = DelegateClass(self._build_layer_colors())
+        qt_list.setItemDelegate(self._layer_delegate)
+        if hasattr(self._layer_delegate, "loading_frame_changed"):
+            self._layer_delegate.loading_frame_changed.connect(
+                qt_list.viewport().update
+            )
+
+    def _build_layer_colors(self):
+        layer_colors = {}
+        for i, (img_layer, shape_layer) in enumerate(
+            zip(self.img_layers, self.shape_layers)
+        ):
+            qcolor = QColor(CHANNEL_COLORS[i % len(CHANNEL_COLORS)])
+            qcolor.setAlpha(30)
+            layer_colors[img_layer.name] = qcolor
+            layer_colors[shape_layer.name] = qcolor
+        return layer_colors
+
+    def _refresh_layer_colors(self):
+        if hasattr(self, "_layer_delegate"):
+            self._layer_delegate._layer_colors = self._build_layer_colors()
+            self._qt_layer_list.viewport().update()
+
+    def _install_layer_delete_guard(self):
+        # Prevent the user from accidentally deleting the managed layers. napari
+        # routes every layer-list deletion (Delete/Backspace key and the
+        # viewer's trash button) through LayerList.remove_selected(), so we wrap
+        # it to veto removal whenever a managed layer is selected. The managed
+        # set is read at call time because the pool is rebuilt when the channel
+        # count changes.
+        layers = self.viewer.layers
+        original_remove_selected = layers.remove_selected
+
+        def guarded_remove_selected():
+            if set(self.img_layers + self.shape_layers) & set(layers.selection):
+                self.viewer.status = "These layers can't be deleted."
+                return
+            original_remove_selected()
+
+        layers.remove_selected = guarded_remove_selected
+
+    def _remove_layer_buttons(self):
+        # Hide the new-layer and delete buttons above the layer list: the
+        # managed layers are fixed, so the user should never add or delete one.
+        button_frame = next(
+            (
+                w
+                for w in QApplication.instance().allWidgets()
+                if type(w).__name__ == "QtLayerButtons"
+            ),
+            None,
+        )
+        if button_frame is None:
+            return
+
+        for attr in (
+            "newPointsButton",
+            "newShapesButton",
+            "newLabelsButton",
+            "deleteButton",
+        ):
+            button = getattr(button_frame, attr, None)
+            if button is not None:
+                button.hide()
+
     def _on_shapes_changed(self, *args, **kwargs):
 
         if not self._loading:
@@ -514,7 +640,7 @@ class AnnotationManager(QWidget):
             self.img_layers.append(
                 self.viewer.add_image(
                     np.zeros((1, 1), dtype=np.uint8),
-                    name=f"{cn} - image",
+                    name=f"\u25ce {cn} image",
                     visible=True,
                 )
             )
@@ -524,14 +650,19 @@ class AnnotationManager(QWidget):
             col = CHANNEL_COLORS[i % len(CHANNEL_COLORS)]
             layer = self.viewer.add_shapes(
                 data=[],
-                name=f"{cn} - ROIs",
+                name=f"\u25b6 add {cn}",
                 edge_color=col,
                 face_color="transparent",
-                edge_width=6,
+                edge_width=2,
                 visible=True,
             )
             layer.events.data.connect(self._on_shapes_changed)
             self.shape_layers.append(layer)
+
+        # Capture the freshly created layer-control values so that loading
+        # another image can restore them, undoing any change the user made in
+        # napari's "layer controls" panel.
+        self._snapshot_layer_controls()
 
     def _load_image(self, idx: int):
 
@@ -560,6 +691,10 @@ class AnnotationManager(QWidget):
                 self._rebuild_viewer_layers(ch_names_data)
 
             else:
+                # User changes in napari's layer controls do not carry over
+                # to the next image
+                self._restore_layer_controls()
+
                 # Same channel count — rename to placeholders first to avoid
                 # conflicts when a channel name matches a slot from the previous image
                 for i in range(n_ch):
@@ -572,7 +707,7 @@ class AnnotationManager(QWidget):
                 col = CHANNEL_COLORS[i % len(CHANNEL_COLORS)]
 
                 self.img_layers[i].data = self._normalize_channel(i, data)
-                self.img_layers[i].name = f"{cn} - image"
+                self.img_layers[i].name = f"\u25ce {cn} image"
                 self.img_layers[i].reset_contrast_limits()
                 self.img_layers[i].visible = True
 
@@ -584,13 +719,13 @@ class AnnotationManager(QWidget):
 
                 if existing_rois:
                     layer.selected_data = set(range(len(existing_rois)))
-                    layer.edge_width = 6
+                    layer.edge_width = 2
                     layer.selected_data = set()
 
-                layer.name = f"{cn} - ROIs"
+                layer.name = f"\u25b6 add {cn}"
                 layer.current_face_color = "transparent"
                 layer.current_edge_color = col
-                layer.current_edge_width = 6
+                layer.current_edge_width = 2
                 layer.visible = True
 
         # Set mode after the blocker exits so the viewer always fires a mode
@@ -600,6 +735,8 @@ class AnnotationManager(QWidget):
             layer.mode = "add_path"
 
         self._loading = False
+
+        self._refresh_layer_colors()
 
         self.viewer.reset_view()
 

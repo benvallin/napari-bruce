@@ -416,7 +416,20 @@ class ConfigEditor(QDialog):
             self._add_pred_widget(model_nm, settings)
 
         btn_add = QPushButton("Add model")
-        btn_add.clicked.connect(lambda: self._add_pred_widget("", {}))
+        # New entries start with no preprocessing beyond the plain min-max stretch
+        # (radius is unused while background subtraction is off)
+        btn_add.clicked.connect(
+            lambda: self._add_pred_widget(
+                "",
+                {
+                    "background_subtraction": False,
+                    "radius": 50,
+                    "robust_normalization": False,
+                    "low_pct": 0.0,
+                    "high_pct": 100.0,
+                },
+            )
+        )
         page_layout.addWidget(btn_add)
 
         page_layout.addStretch()

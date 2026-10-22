@@ -34,8 +34,22 @@ def _get_desktop_path() -> Path:
 
             # FOLDERID_Desktop = {B4BFCC3A-DB2C-424C-B029-7FE99A87C641}
             guid = (ctypes.c_ubyte * 16)(
-                0x3A, 0xCC, 0xBF, 0xB4, 0x2C, 0xDB, 0x4C, 0x42,
-                0xB0, 0x29, 0x7F, 0xE9, 0x9A, 0x87, 0xC6, 0x41,
+                0x3A,
+                0xCC,
+                0xBF,
+                0xB4,
+                0x2C,
+                0xDB,
+                0x4C,
+                0x42,
+                0xB0,
+                0x29,
+                0x7F,
+                0xE9,
+                0x9A,
+                0x87,
+                0xC6,
+                0x41,
             )
             buf = ctypes.c_wchar_p()
             ctypes.windll.shell32.SHGetKnownFolderPath(
@@ -730,7 +744,7 @@ def make_default_config() -> dict:
         },
         "channels_annotation": {
             0: {
-                "background_subtraction": False,
+                "background_subtraction": True,
                 "radius": 50,
                 "robust_normalization": True,
                 "low_pct": 0.0500,
@@ -738,7 +752,7 @@ def make_default_config() -> dict:
                 "color": "purple",
             },
             1: {
-                "background_subtraction": False,
+                "background_subtraction": True,
                 "radius": 50,
                 "robust_normalization": True,
                 "low_pct": 1.0000,
@@ -770,6 +784,62 @@ def make_default_config() -> dict:
                 "robust_normalization": True,
                 "low_pct": 0.05,
                 "high_pct": 99.9999,
+            },
+            "stardist_th_cam_visu": {
+                "background_subtraction": True,
+                "radius": 50,
+                "robust_normalization": True,
+                "low_pct": 0.0500,
+                "high_pct": 99.9500,
+            },
+            "stardist_psyn_cam_visu": {
+                "background_subtraction": True,
+                "radius": 50,
+                "robust_normalization": True,
+                "low_pct": 1.0000,
+                "high_pct": 99.9990,
+            },
+            "stardist_th_cam_visu_no_bs": {
+                "background_subtraction": False,
+                "radius": 50,
+                "robust_normalization": True,
+                "low_pct": 0.0500,
+                "high_pct": 99.9500,
+            },
+            "stardist_psyn_cam_visu_no_bs": {
+                "background_subtraction": False,
+                "radius": 50,
+                "robust_normalization": True,
+                "low_pct": 1.0000,
+                "high_pct": 99.9990,
+            },
+            "stardist_th_ben_visu": {
+                "background_subtraction": True,
+                "radius": 50,
+                "robust_normalization": True,
+                "low_pct": 0.0500,
+                "high_pct": 99.9500,
+            },
+            "stardist_psyn_ben_visu": {
+                "background_subtraction": True,
+                "radius": 50,
+                "robust_normalization": True,
+                "low_pct": 1.0000,
+                "high_pct": 99.9990,
+            },
+            "stardist_th_ben_visu_no_bs": {
+                "background_subtraction": False,
+                "radius": 50,
+                "robust_normalization": True,
+                "low_pct": 0.0500,
+                "high_pct": 99.9500,
+            },
+            "stardist_psyn_ben_visu_no_bs": {
+                "background_subtraction": False,
+                "radius": 50,
+                "robust_normalization": True,
+                "low_pct": 1.0000,
+                "high_pct": 99.9990,
             },
         },
     }
