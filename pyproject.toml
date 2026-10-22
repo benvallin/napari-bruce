@@ -70,6 +70,20 @@ exclude = ["napari_bruce.dev*"]
   "stardist_models/2026.04.21-06.10_stardist_psyn_cam/thresholds.json",
   "stardist_models/2026.04.21-06.10_stardist_psyn_cam/weights_best.h5",
 
+  "stardist_models/stardist_th_cam_visu_no_bs/config.json",
+  "stardist_models/stardist_th_cam_visu_no_bs/thresholds.json",
+  "stardist_models/stardist_th_cam_visu_no_bs/weights_best.h5",
+  "stardist_models/stardist_psyn_cam_visu_no_bs/config.json",
+  "stardist_models/stardist_psyn_cam_visu_no_bs/thresholds.json",
+  "stardist_models/stardist_psyn_cam_visu_no_bs/weights_best.h5",
+
+  "stardist_models/stardist_th_cam_visu/config.json",
+  "stardist_models/stardist_th_cam_visu/thresholds.json",
+  "stardist_models/stardist_th_cam_visu/weights_best.h5",
+  "stardist_models/stardist_psyn_cam_visu/config.json",
+  "stardist_models/stardist_psyn_cam_visu/thresholds.json",
+  "stardist_models/stardist_psyn_cam_visu/weights_best.h5",
+
 ]
 
 [project.entry-points."napari.manifest"]
