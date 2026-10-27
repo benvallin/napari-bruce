@@ -750,12 +750,14 @@ class LoadWorker(BaseWorker):
         # Load images and associated metadata
         raw_data, raw_metadata = workflow.load_ome_tiff(file=ome_tiff_file_path)
 
-        # Subset data and metadata to the first 2 channels
-        data = dict(list(raw_data.items())[:2])
-        metadata = {
-            **raw_metadata,
-            "channels": dict(list(raw_metadata["channels"].items())[:2]),
-        }
+        # Bruce works on exactly 2 channels
+        if len(raw_data) != 2:
+            raise workflow.InvalidImageError(
+                f"Bruce requires images with exactly 2 channels, found {len(raw_data)}."
+            )
+
+        data = raw_data
+        metadata = raw_metadata
 
         # For each channel...
         for i, k in enumerate(data.keys()):
@@ -1404,6 +1406,11 @@ class PluginManager(QWidget):
 
     def _build_layout(self):
 
+        self.models_label = QLabel("")
+        self.models_label.setWordWrap(True)
+        self.models_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.models_label.setVisible(False)
+
         self.file_label = QLabel("")
         self.file_label.setWordWrap(True)
         self.file_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
@@ -1454,6 +1461,7 @@ class PluginManager(QWidget):
 
         self.header_layout = QVBoxLayout()
         self.header_layout.addSpacing(30)
+        self.header_layout.addWidget(self.models_label)
         self.header_layout.addWidget(self.file_label)
         self.header_layout.addWidget(self.msg_container)
 
@@ -2649,6 +2657,7 @@ class PluginManager(QWidget):
             and self._loaded_model_names.get(1) == model1
         ):
             self._set_message("", MessageLevel.NONE)
+            self._update_models_label()
             self._after_models_ready()
             return
 
@@ -2680,7 +2689,20 @@ class PluginManager(QWidget):
 
         self._set_message("", MessageLevel.NONE)
 
+        self._update_models_label()
+
         self._after_models_ready()
+
+    def _update_models_label(self):
+        """Persistently display the loaded StarDist model names above the file name."""
+
+        lines = [
+            f"{self.workflow.ch_names.get(i, f'ch{i}')} model: {self._loaded_model_names[i]}"
+            for i in (0, 1)
+            if self._loaded_model_names.get(i)
+        ]
+        self.models_label.setText("\n".join(lines))
+        self.models_label.setVisible(bool(lines))
 
     def _after_models_ready(self):
         """Transition to the correct state after models are loaded (or skipped)."""
@@ -2764,6 +2786,8 @@ class PluginManager(QWidget):
 
         self.file_label.setText("")
         self.file_label.setVisible(False)
+
+        self._update_models_label()
 
         self._set_message("", MessageLevel.NONE)
 
@@ -2986,8 +3010,9 @@ class PluginManager(QWidget):
 
             self.workflow.ch_names[i] = metadata["channels"][i]["name"]
 
-        # Update clip-pct box labels to show real channel names
+        # Update clip-pct box labels and models label to show real channel names
         self._update_clip_pct_box_labels()
+        self._update_models_label()
 
         # Record the settings used for this initial load
         for i in [0, 1]:

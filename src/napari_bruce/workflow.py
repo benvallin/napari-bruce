@@ -9,6 +9,7 @@ import tifffile
 import numpy as np
 import subprocess
 import shutil
+import tempfile
 import importlib.resources
 from itertools import groupby
 from pathlib import Path
@@ -81,7 +82,9 @@ def robust_normalization(
 # %% subtract_large_scale_background() ----
 
 
-def subtract_large_scale_background(img: np.ndarray, radius: int = 50, downsample: int = 4) -> np.ndarray:
+def subtract_large_scale_background(
+    img: np.ndarray, radius: int = 50, downsample: int = 4
+) -> np.ndarray:
     """Remove smooth, large-scale background via disk-shaped morphological opening.
 
     Estimates a background image by grayscale opening with a disk structuring
@@ -121,13 +124,19 @@ def subtract_large_scale_background(img: np.ndarray, radius: int = 50, downsampl
     pad_w = (-w) % downsample
     padded = cv2.copyMakeBorder(img, 0, pad_h, 0, pad_w, cv2.BORDER_REPLICATE)
     ph, pw = padded.shape
-    small = padded.reshape(ph // downsample, downsample, pw // downsample, downsample).min(axis=(1, 3))
+    small = padded.reshape(
+        ph // downsample, downsample, pw // downsample, downsample
+    ).min(axis=(1, 3))
 
     small_radius = max(1, round(radius / downsample))
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * small_radius + 1, 2 * small_radius + 1))
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (2 * small_radius + 1, 2 * small_radius + 1)
+    )
     small_background = cv2.morphologyEx(small, cv2.MORPH_OPEN, kernel)
     background = cv2.resize(
-        small_background, (small.shape[1] * downsample, small.shape[0] * downsample), interpolation=cv2.INTER_NEAREST
+        small_background,
+        (small.shape[1] * downsample, small.shape[0] * downsample),
+        interpolation=cv2.INTER_NEAREST,
     )[:h, :w]
     corrected = cv2.subtract(img, background)
 
@@ -262,7 +271,11 @@ def msk_to_cnts(msk: np.ndarray) -> dict:
             # fragment per cell, so skip the cv2.contourArea() call(s) then --
             # this loop runs once per cell and was previously a ~60x perf fix.
             contours = c[0]
-            c = (contours[0] if len(contours) == 1 else max(contours, key=cv2.contourArea)).squeeze()
+            c = (
+                contours[0]
+                if len(contours) == 1
+                else max(contours, key=cv2.contourArea)
+            ).squeeze()
 
             if len(c) > 2:
 
@@ -287,7 +300,11 @@ def msk_to_cnts(msk: np.ndarray) -> dict:
 
             # See the largest-fragment note above.
             contours = c[0]
-            c = (contours[0] if len(contours) == 1 else max(contours, key=cv2.contourArea)).squeeze()
+            c = (
+                contours[0]
+                if len(contours) == 1
+                else max(contours, key=cv2.contourArea)
+            ).squeeze()
 
             if len(c) > 2:
 
@@ -946,7 +963,7 @@ def load_ome_tiff(file: str | Path) -> tuple:
       file (str | Path): path to .ome.tiff file.
 
     Returns:
-      tuple: tuple containing 'images' and 'metadata' dict objects.
+      tuple: tuple containing 'images' and 'metadata' dict objects. 'images' maps each channel name to {"img": array}; a single-channel image (no channel name) is stored under the key "img".
 
     """
 
@@ -956,9 +973,14 @@ def load_ome_tiff(file: str | Path) -> tuple:
     # Load images
     imgs = tifffile.imread(file)
 
-    if imgs.ndim != 3:
+    if imgs.ndim not in (2, 3):
 
-        raise InvalidImageError("Input file is not a multi-channel image.")
+        raise InvalidImageError(f"Unexpected image dimensions: {imgs.shape}.")
+
+    # Single-channel images are 2D: add a channel axis so both cases share one path
+    if imgs.ndim == 2:
+
+        imgs = imgs[np.newaxis]
 
     # Process metadata
     ome_xml = str(tifffile.TiffFile(file).ome_metadata)
@@ -1008,12 +1030,64 @@ def load_ome_tiff(file: str | Path) -> tuple:
     images = {}
 
     for k in metadata["channels"].keys():
-        nm = metadata["channels"][k]["name"]
+        nm = metadata["channels"][k]["name"] or "ch0"
         images[nm] = {"img": imgs[k, :, :]}
 
     output = (images, metadata)
 
     return output
+
+
+# %% read_zvi() ----
+
+
+def read_zvi(
+    file: str | Path,
+    tmp_dir_path: str | Path | None = None,
+    jar_pkg: str = "napari_bruce.bioformats",
+    jar_name: str = "bioformats_package.jar",
+    java_opts: list | None = None,
+    timeout: float | None = 300.0,
+) -> tuple:
+    """Convert PALM .zvi file to OME-TIFF and load it.
+
+    Args:
+      file (str | Path): path to PALM .zvi file.
+      tmp_dir_path (str | Path | None): directory receiving the intermediate OME-TIFF (created if missing, kept). If None, a temporary directory is used and deleted after loading.
+      jar_pkg (str): name of the Python package containing the Bio-Formats JAR file.
+      jar_name (str): file name of the Bio-Formats JAR inside 'jar_pkg'.
+      java_opts (list): additional JVM options to pass to the java command.
+      timeout (float): maximum number of seconds to allow the conversion subprocess to run.
+
+    Returns:
+      tuple: tuple containing 'images' and 'metadata' dict objects, as returned by load_ome_tiff().
+
+    """
+
+    file = Path(file).expanduser()
+
+    def _convert_and_load(out_dir_path: str | Path) -> tuple:
+
+        convert_zvi_to_ome(
+            file=file,
+            out_dir_path=out_dir_path,
+            jar_pkg=jar_pkg,
+            jar_name=jar_name,
+            java_opts=java_opts,
+            timeout=timeout,
+        )
+
+        # load_ome_tiff() reads the pixel data eagerly (tifffile.imread), so the
+        # returned arrays stay valid after a temporary directory is removed.
+        return load_ome_tiff(file=Path(out_dir_path, f"{file.stem}.ome.tiff"))
+
+    if tmp_dir_path is not None:
+
+        return _convert_and_load(tmp_dir_path)
+
+    with tempfile.TemporaryDirectory() as tmp:
+
+        return _convert_and_load(tmp)
 
 
 # %% _txt_to_elem_dfs() ----
@@ -1130,6 +1204,11 @@ def _get_elem_cnt(elem_df: pd.DataFrame) -> np.ndarray:
 
     return output
 
+
+# Stage displacement (x, y), in pixels, between an image and the FOV PALMRobo returns
+# to when going to that image's center marker. Measured on 10 pre-/post-cut 20X pairs
+# (mean of (stage2 - stage1) / physical_size; SD 0.26 / 0.39 px); same in pixels at 10X.
+_CENTER_MARKER_STAGE_SHIFT_PX = (-53.47, 59.38)
 
 # %% _scale_elem_cnt() ----
 
@@ -1437,7 +1516,9 @@ class ElemRoi:
     laser_function: str
     tube_id: str
     comment: str  # "<label> #<k> - COLLECT/OMIT"
-    overall_id: int = -1  # cross-group ordering index (collected 1..N, omitted N+1..); assigned globally after gathering
+    overall_id: int = (
+        -1
+    )  # cross-group ordering index (collected 1..N, omitted N+1..); assigned globally after gathering
 
 
 def make_elem_metadata(
@@ -1510,9 +1591,7 @@ def make_elem_metadata(
         laser_function = summary[f"{status}_laser_function"]
         tube_id = summary[f"{status}_tube_id"]
 
-        override = (
-            selected_ids_override.get(pop_key) if selected_ids_override else None
-        )
+        override = selected_ids_override.get(pop_key) if selected_ids_override else None
         selected = resolve_collect_selection(
             pop_ids, summary[f"{status}_collect"], override
         )
@@ -1640,6 +1719,15 @@ Elements :\n
         metadata_dict=metadata_dict,
         to="PALM",
     )[0]
+    # PALMRobo's "go to element position" lands (_CENTER_MARKER_STAGE_SHIFT_PX x
+    # pixel size) away from the stage position the image was acquired at; pre-shift
+    # the marker by that amount so the FOV returns to the original one.
+    center_palm = center_palm + np.array(_CENTER_MARKER_STAGE_SHIFT_PX) * np.array(
+        [
+            metadata_dict["image"]["physical_size_x"],
+            metadata_dict["image"]["physical_size_y"],
+        ]
+    )
     half_side = (600 / magnification) / 2
     center_cnt = np.round(
         np.array(
@@ -1722,9 +1810,7 @@ Elements :\n
 # %% merge_elem_lists() ----
 
 
-def _read_elem_txt(
-    file: str | Path, img_nm: str, comment_sep: str
-) -> list[dict]:
+def _read_elem_txt(file: str | Path, img_nm: str, comment_sep: str) -> list[dict]:
     """Parse one PALMRobo element-list .txt into lean per-element dicts.
 
     Contours are read as-is (already in absolute PALM stage coordinates) and each
@@ -1758,9 +1844,7 @@ def _read_elem_txt(
         # The center marker's Comment already names its FOV, so leave it as-is;
         # prefix only cut elements to keep their origin traceable when combined.
         comment = (
-            meta["Comment"]
-            if is_text
-            else f"{img_nm}{comment_sep}{meta['Comment']}"
+            meta["Comment"] if is_text else f"{img_nm}{comment_sep}{meta['Comment']}"
         )
 
         # For Text elements written with the new inline-label format, the label
@@ -1776,7 +1860,11 @@ def _read_elem_txt(
         # Z may be parsed as float64 by pandas when all values in the column are
         # numeric; normalise back to integer string to match the source format.
         z_val = meta["Z"]
-        z = str(int(z_val)) if isinstance(z_val, float) and not math.isnan(z_val) else str(z_val)
+        z = (
+            str(int(z_val))
+            if isinstance(z_val, float) and not math.isnan(z_val)
+            else str(z_val)
+        )
 
         elems.append(
             {
@@ -1981,14 +2069,18 @@ def _find_elem_overlaps(
                         "no": a["no"],
                         "img_nm": a["img_nm"],
                         "label": a["label"],
-                        "collect_str": "COLLECT" if "- COLLECT" in a["comment"] else "OMIT",
+                        "collect_str": (
+                            "COLLECT" if "- COLLECT" in a["comment"] else "OMIT"
+                        ),
                         "status": status_a,
                     },
                     "b": {
                         "no": b["no"],
                         "img_nm": b["img_nm"],
                         "label": b["label"],
-                        "collect_str": "COLLECT" if "- COLLECT" in b["comment"] else "OMIT",
+                        "collect_str": (
+                            "COLLECT" if "- COLLECT" in b["comment"] else "OMIT"
+                        ),
                         "status": status_b,
                     },
                     "pct_a": pct_a,
@@ -2018,8 +2110,12 @@ def format_overlap_warnings(overlaps: list[dict]) -> str:
         pop_tag = "same population" if o["same_population"] else "different population"
         lines.append(f"\nPair {i}:")
         lines.append(f"  {o['inter_um2']:.0f} µm² overlap - {pop_tag}")
-        lines.append(f"  #{a['no']} • {a['img_nm']} | {a['label']} | {a['collect_str']}")
-        lines.append(f"  #{b['no']} • {b['img_nm']} | {b['label']} | {b['collect_str']}")
+        lines.append(
+            f"  #{a['no']} • {a['img_nm']} | {a['label']} | {a['collect_str']}"
+        )
+        lines.append(
+            f"  #{b['no']} • {b['img_nm']} | {b['label']} | {b['collect_str']}"
+        )
 
     return "\n".join(lines)
 
@@ -2083,9 +2179,7 @@ def merge_elem_lists(
         omit_file = folder / "elem_list_omit.txt"
 
         if not collect_file.exists():
-            raise FileNotFoundError(
-                f"No elem_list_collect.txt found in:\n{folder}"
-            )
+            raise FileNotFoundError(f"No elem_list_collect.txt found in:\n{folder}")
 
         collected.extend(_read_elem_txt(collect_file, img_nm, comment_sep))
 
@@ -2109,7 +2203,9 @@ def merge_elem_lists(
     # complete picture regardless of any exclusions -- unless the caller already
     # has that picture (detect_overlaps=False), in which case skip the O(N^2)
     # scan entirely rather than repeating it just to discard the result.
-    overlaps = _find_elem_overlaps(collected + omitted_no_text) if detect_overlaps else []
+    overlaps = (
+        _find_elem_overlaps(collected + omitted_no_text) if detect_overlaps else []
+    )
 
     # Apply caller-requested exclusions.  Python object identity is used to match
     # elements across the three lists safely (Text elements in `omitted` carry
@@ -2405,13 +2501,17 @@ def zvi_to_dict(
 
             continue
 
-        # Subset data and metadata to the first 2 channels
-        data = dict(list(raw_data.items())[:2])
+        if len(raw_data) != 2:
 
-        metadata = {
-            **raw_metadata,
-            "channels": dict(list(raw_metadata["channels"].items())[:2]),
-        }
+            print(f"Excluding {fn} (expected exactly 2 channels, found {len(raw_data)})")
+
+            imgs_excluded.append(fn)
+
+            continue
+
+        data = raw_data
+
+        metadata = raw_metadata
 
         imgs[fn] = {"data": data, "metadata": metadata}
 
