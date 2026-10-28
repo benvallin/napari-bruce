@@ -1208,7 +1208,12 @@ def _get_elem_cnt(elem_df: pd.DataFrame) -> np.ndarray:
 # Stage displacement (x, y), in pixels, between an image and the FOV PALMRobo returns
 # to when going to that image's center marker. Measured on 10 pre-/post-cut 20X pairs
 # (mean of (stage2 - stage1) / physical_size; SD 0.26 / 0.39 px); same in pixels at 10X.
-_CENTER_MARKER_STAGE_SHIFT_PX = (-53.47, 59.38)
+# Applied to the marker in PALM units with x sign FLIPPED (PALM x runs opposite to
+# stage x; the first, unflipped attempt took the x error from -53 to -110 px). x is
+# divided by 1.052: the observed x gain of a PALM-unit shift (8 pairs, 2026.10.27,
+# 20X: (-109.70 + 53.47) / -53.47), cf. the x rescaling in _scale_elem_cnt. y gain ~1
+# (residual 0.09 px).
+_CENTER_MARKER_STAGE_SHIFT_PX = (53.47 / 1.052, 59.38)
 
 # %% _scale_elem_cnt() ----
 
