@@ -1204,17 +1204,6 @@ def _get_elem_cnt(elem_df: pd.DataFrame) -> np.ndarray:
 
     return output
 
-
-# Stage displacement (x, y), in pixels, between an image and the FOV PALMRobo returns
-# to when going to that image's center marker. Measured on 10 pre-/post-cut 20X pairs
-# (mean of (stage2 - stage1) / physical_size; SD 0.26 / 0.39 px); same in pixels at 10X.
-# Applied to the marker in PALM units with x sign FLIPPED (PALM x runs opposite to
-# stage x; the first, unflipped attempt took the x error from -53 to -110 px). x is
-# divided by 1.052: the observed x gain of a PALM-unit shift (8 pairs, 2026.10.27,
-# 20X: (-109.70 + 53.47) / -53.47), cf. the x rescaling in _scale_elem_cnt. y gain ~1
-# (residual 0.09 px).
-_CENTER_MARKER_STAGE_SHIFT_PX = (53.47 / 1.052, 59.38)
-
 # %% _scale_elem_cnt() ----
 
 
@@ -1708,10 +1697,14 @@ Elements :\n
 
     # Image-center Text marker, shared by every list (only the "No" varies). A
     # PALMRobo Text element is a 2-point element: the two diagonal corners of a
-    # fixed-size square centred on the marker, whose side scales inversely with
-    # magnification (≈ 600 / magnification µm: 30 µm at 20X, 60 µm at 10X — matches
-    # every Text marker observed in PALMRobo-exported lists). Build it as that
-    # square centred on the image centre, in PALM stage coordinates.
+    # fixed-size square whose side scales inversely with magnification (≈ 600 /
+    # magnification µm: 30 µm at 20X, 60 µm at 10X — matches every Text marker
+    # observed in PALMRobo-exported lists). PALMRobo's "go to element position"
+    # centers the FOV on the (max x, min y) corner of that square, not on its center,
+    # so the square is built with that corner exactly on the image center (in PALM
+    # stage coordinates): x spans [cx - side, cx], y spans [cy, cy + side]. Holds only
+    # if PALMRobo keeps the box at its native size: on 2026.10.27 it rescaled the
+    # markers to 60 µm at 20X and the FOV landed 30 µm off in x.
     center_palm = _scale_elem_cnt(
         elem_cnt=np.array(
             [
@@ -1724,21 +1717,12 @@ Elements :\n
         metadata_dict=metadata_dict,
         to="PALM",
     )[0]
-    # PALMRobo's "go to element position" lands (_CENTER_MARKER_STAGE_SHIFT_PX x
-    # pixel size) away from the stage position the image was acquired at; pre-shift
-    # the marker by that amount so the FOV returns to the original one.
-    center_palm = center_palm + np.array(_CENTER_MARKER_STAGE_SHIFT_PX) * np.array(
-        [
-            metadata_dict["image"]["physical_size_x"],
-            metadata_dict["image"]["physical_size_y"],
-        ]
-    )
-    half_side = (600 / magnification) / 2
+    side = 600 / magnification
     center_cnt = np.round(
         np.array(
             [
-                [center_palm[0] - half_side, center_palm[1] - half_side],
-                [center_palm[0] + half_side, center_palm[1] + half_side],
+                [center_palm[0] - side, center_palm[1]],
+                [center_palm[0], center_palm[1] + side],
             ]
         ),
         1,
@@ -1799,7 +1783,7 @@ Elements :\n
                 thickness="1",
                 cutshot="0,0",
                 z=z,
-                inline_label=f"{metadata_dict['img_nm']}",
+                inline_label=metadata_dict["img_nm"],
             )
         )
 
@@ -1821,8 +1805,8 @@ def _read_elem_txt(file: str | Path, img_nm: str, comment_sep: str) -> list[dict
     Contours are read as-is (already in absolute PALM stage coordinates) and each
     cut element's Comment is prefixed with the source image name so its origin
     stays traceable once lists from several FOVs are combined. The image-center
-    "Text" marker is kept verbatim (its Comment already names the FOV) so it can
-    be re-emitted as a Text element rather than a cut region.
+    "Text" marker is kept verbatim (its inline label already names the FOV) so it
+    can be re-emitted as a Text element rather than a cut region.
 
     Args:
       file (str | Path): path to a PALMRobo element-list .txt file.
@@ -1846,8 +1830,9 @@ def _read_elem_txt(file: str | Path, img_nm: str, comment_sep: str) -> list[dict
 
         cnt = _get_elem_cnt(elem_df=df)
 
-        # The center marker's Comment already names its FOV, so leave it as-is;
-        # prefix only cut elements to keep their origin traceable when combined.
+        # The center marker's inline label already names its FOV, so leave its
+        # Comment as-is; prefix only cut elements to keep their origin traceable
+        # when combined.
         comment = (
             meta["Comment"] if is_text else f"{img_nm}{comment_sep}{meta['Comment']}"
         )
